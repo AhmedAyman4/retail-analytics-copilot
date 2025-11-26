@@ -4,9 +4,9 @@ import dspy
 class RouterSignature(dspy.Signature):
     """
     Classify the user question into one of three categories:
-    - 'sql': Requires database access (sales numbers, orders, customer data).
+    - 'sql': Requires database access (sales numbers, orders, customer data, revenue).
     - 'rag': Requires looking up text policies, calendars, or definitions.
-    - 'hybrid': Requires both (e.g., "sales during Summer 1997").
+    - 'hybrid': Requires both (e.g., "sales during Summer 1997" - needs calendar dates + DB).
     """
     question = dspy.InputField()
     classification = dspy.OutputField(desc="One of: 'sql', 'rag', 'hybrid'")
@@ -15,29 +15,31 @@ class RouterSignature(dspy.Signature):
 class PlannerSignature(dspy.Signature):
     """
     Analyze the question and retrieved context to extract constraints for SQL generation.
-    Identify date ranges, product categories, or specific KPI formulas needed.
+    - Map text terms (e.g., "Summer 1997") to specific DATE RANGES (YYYY-MM-DD).
+    - Map text categories (e.g., "Beverages") to exact DB category names.
     """
     context = dspy.InputField(desc="Retrieved chunks from docs")
     question = dspy.InputField()
     analysis = dspy.OutputField(desc="Reasoning about dates, IDs, and formulas")
-    sql_requirements = dspy.OutputField(desc="Specific filtering logic needed for SQL")
+    sql_requirements = dspy.OutputField(desc="Specific WHERE clause constraints (e.g. OrderDate BETWEEN '1997-06-01' AND ...)")
 
-# 3. Text to SQL
+# 3. Text to SQL (UPDATED)
 class TextToSQLSignature(dspy.Signature):
     """
     Generate executable SQLite query for the Northwind database.
-    Use the provided schema.
-    Rules:
-    - Use 'Order Details' table (quote it).
-    - For Revenue: SUM(UnitPrice * Quantity * (1 - Discount)).
-    - For Margin: SUM((UnitPrice * 0.7) * Quantity * (1 - Discount)) unless CostOfGoods exists.
-    - Dates are in YYYY-MM-DD format.
+    
+    CRITICAL RULES:
+    1. Use these view names: 'orders', 'order_details', 'products', 'categories'.
+    2. Date Format: Use string comparison. Example: OrderDate >= '1997-01-01'
+    3. Do NOT use julianday() or complex functions.
+    4. For Revenue: SUM(UnitPrice * Quantity * (1 - Discount))
+    5. JOIN correctly: products ON order_details.ProductID = products.ProductID
     """
     schema = dspy.InputField()
     requirements = dspy.InputField(desc="Constraints from planner")
     question = dspy.InputField()
     previous_error = dspy.InputField(desc="Error from previous attempt, if any", optional=True)
-    sql_query = dspy.OutputField(desc="The SQL query string only")
+    sql_query = dspy.OutputField(desc="The SQL query string only (start with SELECT)")
 
 # 4. Synthesizer (Robust)
 class SynthesizerSignature(dspy.Signature):
@@ -83,8 +85,6 @@ class SQLModule(dspy.Module):
 class SynthesizerModule(dspy.Module):
     def __init__(self):
         super().__init__()
-        # Using Predict instead of ChainOfThought to reduce JSON nesting issues
-        # The prompt explicitly asks for reasoning in the 'explanation' field.
         self.prog = dspy.Predict(SynthesizerSignature)
     def forward(self, question, context, sql_query, sql_result, format_hint):
         return self.prog(question=question, context=context, sql_query=sql_query, sql_result=sql_result, format_hint=format_hint)
