@@ -28,7 +28,7 @@ if model_option == "Google Gemini":
     gemini_key = os.getenv("GOOGLE_API_KEY")
     
     # 2. Try Streamlit Secrets (Streamlit Cloud / .streamlit/secrets.toml)
-    if not api_key:
+    if not gemini_key:
         try:
             if "GOOGLE_API_KEY" in st.secrets:
                 gemini_key = st.secrets["GOOGLE_API_KEY"]
@@ -37,12 +37,12 @@ if model_option == "Google Gemini":
         except Exception:
             pass # General error accessing secrets
     
-    if api_key:
+    if gemini_key:
         st.sidebar.success("✅ API Key detected from Secrets")
     else:
         # Only ask if not found in environment or secrets
         st.sidebar.warning("Secret 'GOOGLE_API_KEY' not found.")
-        api_key = st.sidebar.text_input("Enter Gemini API Key manually", type="password")
+        gemini_key = st.sidebar.text_input("Enter Gemini API Key manually", type="password")
 
 # --- Initialize Agent & Model (Cached) ---
 @st.cache_resource(show_spinner=False) 
@@ -61,6 +61,7 @@ def load_agent_resources(provider, gemini_key=None):
         max_retries = 30
         server_ready = False
         
+        # 1. Wait for Ollama Server
         for _ in range(max_retries):
             try:
                 response = requests.get(server_url)
@@ -75,6 +76,7 @@ def load_agent_resources(provider, gemini_key=None):
             status.error("Failed to connect to Ollama. Check logs.")
             return None, None, None
 
+        # 2. Wait for Model Download
         status.info(f"Ollama is online. Checking for model '{target_model}'...")
         model_ready = False
         pull_retries = 150
@@ -90,6 +92,8 @@ def load_agent_resources(provider, gemini_key=None):
                         break
             except Exception:
                 pass
+            
+            status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
             time.sleep(2)
 
         if not model_ready:
@@ -144,7 +148,7 @@ def load_agent_resources(provider, gemini_key=None):
         return None, None, None
 
 # Load resources
-agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option, api_key)
+agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option, gemini_key)
 
 # --- UI Layout ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
@@ -198,7 +202,7 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
         st.markdown(prompt)
 
     if not agent_workflow:
-        if model_option == "Google Gemini" and not api_key:
+        if model_option == "Google Gemini" and not gemini_key:
             st.error("Please enter a Gemini API Key in the sidebar or check your Secrets configuration.")
         else:
             st.error("Agent failed to load. Check settings.")
