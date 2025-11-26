@@ -16,20 +16,15 @@ st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
 # --- Initialize Agent & Model (Cached) ---
 @st.cache_resource
 def load_agent_resources():
-    """
-    Connects to the local Ollama server and initializes the Agent Graph.
-    """
     status = st.empty()
     status.info("Waiting for Ollama server to come online at localhost:11434...")
     
-    # Wait for the server to be ready
     server_url = "http://localhost:11434"
-    max_retries = 30 # Wait up to ~60 seconds
+    max_retries = 30
     server_ready = False
     
     for _ in range(max_retries):
         try:
-            # Check if root endpoint returns "Ollama is running"
             response = requests.get(server_url)
             if response.status_code == 200:
                 server_ready = True
@@ -45,40 +40,48 @@ def load_agent_resources():
     status.info("Ollama online! Configuring DSPy...")
     
     try:
-        # UPDATED: Configure DSPy for Ollama as requested
+        # We use 'ollama/phi3.5' which is safer than 'ollama_chat' for some setups
         lm = dspy.LM(
-            model="ollama_chat/phi3.5:3.8b",  # Model tag
+            model="ollama/phi3.5:3.8b",
             api_base="http://localhost:11434", 
-            api_key="", # Ollama doesn't require a key usually
+            api_key="",
         )
         
         dspy.configure(lm=lm)
-        
-        # Initialize the Graph
         agent_workflow = HybridAgent().build_graph()
         
         status.success("Agent Connected & Ready!")
         time.sleep(1)
         status.empty() 
-        return agent_workflow
+        return agent_workflow, lm
     except Exception as e:
         status.error(f"Failed to configure agent: {e}")
-        return None
+        return None, None
 
 # Load the agent
-agent_app = load_agent_resources()
+agent_data = load_agent_resources()
+if agent_data:
+    agent_app, lm_instance = agent_data
+else:
+    agent_app, lm_instance = None, None
 
 # --- UI Layout ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
-st.markdown("""
-Ask questions about sales, products, marketing calendars, and KPIs.
-*Backed by Ollama (phi3.5:3.8b) + SQLite*
-""")
 
 # Sidebar
 with st.sidebar:
     st.header("Debug Info")
     st.info("Backend: Ollama (Port 11434)")
+    
+    if st.button("Test LLM Connection"):
+        with st.spinner("Testing simple prompt..."):
+            try:
+                # Simple generation test
+                res = lm_instance("Say hello!")
+                st.success(f"Success! Model replied: {res}")
+            except Exception as e:
+                st.error(f"Connection Failed: {e}")
+
     if st.checkbox("Show Schema"):
         from agent.tools.sqlite_tool import SQLiteTool
         st.code(SQLiteTool().get_schema_info())
@@ -103,7 +106,7 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
     if agent_app:
         with st.chat_message("assistant"):
             placeholder = st.empty()
-            placeholder.markdown("Thinking...")
+            placeholder.markdown("⏳ **Thinking...** (This may take 30-60s on CPU)")
             
             try:
                 initial_state = {
@@ -113,6 +116,7 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                     "sql_error": None
                 }
                 
+                # Run the Agent
                 output = agent_app.invoke(initial_state)
                 
                 final_ans = output.get("final_answer", "No answer.")
@@ -124,10 +128,11 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                 details = {
                     "sql": output.get("sql_query"),
                     "citations": output.get("citations"),
-                    "sql_error": output.get("sql_error")
+                    "sql_error": output.get("sql_error"),
+                    "classification": output.get("classification")
                 }
                 
-                with st.expander("Details"):
+                with st.expander("Show Logic (SQL & Citations)"):
                     st.json(details)
                 
                 st.session_state.messages.append({
