@@ -8,8 +8,7 @@ class LocalPhi(dspy.LM):
     using Hugging Face Transformers.
     """
     def __init__(self, model_name="microsoft/Phi-3.5-mini-instruct", max_tokens=1000):
-        # 1. Pass the string name to the parent class. 
-        # DSPy stores this in self.model and expects it to remain a string.
+        # Pass the string name to the parent class.
         super().__init__(model=model_name)
         
         print(f"Initializing local pipeline for {model_name}...")
@@ -21,8 +20,7 @@ class LocalPhi(dspy.LM):
         # Load Tokenizer & Model
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
-        # 2. Assign the loaded model object to 'self.hf_model' instead of 'self.model'
-        # This prevents the "AttributeError: object has no attribute 'split'"
+        # Store as self.hf_model to avoid conflict with dspy.LM.model (which must be a string)
         self.hf_model = AutoModelForCausalLM.from_pretrained(
             model_name, 
             trust_remote_code=True,
@@ -46,11 +44,33 @@ class LocalPhi(dspy.LM):
             "do_sample": False # Deterministic for agents
         }
 
+    def __call__(self, prompt=None, messages=None, **kwargs):
+        """
+        Override __call__ to strictly enforce local execution.
+        We handle both 'prompt' (string) and 'messages' (list) inputs 
+        to satisfy different DSPy calling patterns.
+        """
+        # 1. Handle "messages" (Chat format) if "prompt" is missing
+        if prompt is None and messages is not None:
+            # Basic conversion of chat messages to a string prompt
+            # (Phi-3 supports chat templates, but simple concatenation works for this agent context)
+            prompt = ""
+            for m in messages:
+                role = m.get('role', 'user')
+                content = m.get('content', '')
+                prompt += f"<|{role}|>\n{content}\n"
+            prompt += "<|assistant|>\n"
+            
+        # 2. Fallback if both are missing (should not happen in normal usage)
+        if prompt is None:
+            prompt = ""
+
+        # 3. Delegate to basic_request
+        return self.basic_request(prompt, **kwargs)
+
     def basic_request(self, prompt, **kwargs):
         """
-        The method DSPy calls to generate text.
-        We do NOT override __call__ here; we let dspy.LM handle the calling interface
-        and delegate to this method.
+        The method that actually runs the pipeline.
         """
         # Merge default kwargs with request kwargs
         gen_kwargs = {**self.kwargs, **kwargs}
@@ -59,11 +79,9 @@ class LocalPhi(dspy.LM):
         gen_kwargs.pop('n', None) 
         
         try:
-            # Ensure prompt is a string (DSPy might pass other types in rare cases)
             if not prompt:
                 return [""]
                 
-            # Phi-3.5 works best with a chat template, but pure string prompting is supported.
             output = self.pipe(prompt, **gen_kwargs)
             generated_text = output[0]['generated_text']
             
