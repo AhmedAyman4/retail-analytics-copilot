@@ -1,66 +1,71 @@
 import dspy
 
-# 1. Router
+# 1. Router Signature
 class RouterSignature(dspy.Signature):
     """
     Classify the user question into one of three categories:
-    - 'sql': Requires database access (sales numbers, orders, customer data, revenue).
-    - 'rag': Requires looking up text policies, calendars, or definitions.
-    - 'hybrid': Requires both (e.g., "sales during Summer 1997" - needs calendar dates + DB).
+    - 'sql': Requires database access.
+    - 'rag': Requires looking up text policies.
+    - 'hybrid': Requires both.
     """
     question = dspy.InputField()
     classification = dspy.OutputField(desc="One of: 'sql', 'rag', 'hybrid'")
 
-# 2. Planner
+# 2. [RESTORED] Planner Signature
 class PlannerSignature(dspy.Signature):
     """
     Analyze the question and retrieved context to extract constraints for SQL generation.
-    - Map text terms (e.g., "Summer 1997") to specific DATE RANGES (YYYY-MM-DD).
-    - Map text categories (e.g., "Beverages") to exact DB category names.
     """
     context = dspy.InputField(desc="Retrieved chunks from docs")
     question = dspy.InputField()
     analysis = dspy.OutputField(desc="Reasoning about dates, IDs, and formulas")
-    sql_requirements = dspy.OutputField(desc="Specific WHERE clause constraints (e.g. OrderDate BETWEEN '1997-06-01' AND ...)")
+    sql_requirements = dspy.OutputField(desc="Specific filtering logic needed for SQL")
 
-# 3. Text to SQL (UPDATED)
+# 3. SQL Signature (Strict Mode)
 class TextToSQLSignature(dspy.Signature):
     """
     Generate executable SQLite query for the Northwind database.
     
-    CRITICAL RULES:
-    1. Use these view names: 'orders', 'order_details', 'products', 'categories'.
-    2. Date Format: Use string comparison. Example: OrderDate >= '1997-01-01'
-    3. Do NOT use julianday() or complex functions.
-    4. For Revenue: SUM(UnitPrice * Quantity * (1 - Discount))
-    5. JOIN correctly: products ON order_details.ProductID = products.ProductID
+    SCHEMA CHEAT SHEET (FOLLOW STRICTLY):
+    1. JOINS:
+       - orders -> order_details: ON orders.OrderID = order_details.OrderID
+       - order_details -> products: ON order_details.ProductID = products.ProductID
+       - products -> categories: ON products.CategoryID = categories.CategoryID
+       
+    2. COLUMNS:
+       - Revenue Logic: SUM(order_details.UnitPrice * order_details.Quantity * (1 - order_details.Discount))
+       - Date Column: Use 'orders.OrderDate' (Format: 'YYYY-MM-DD'). DO NOT USE ShipDate.
+       - Product Names: Use 'products.ProductName'.
+       - Category Names: Use 'categories.CategoryName'.
+       
+    3. RULES:
+       - return ONLY the SQL string.
+       - NO comments (-- or //).
+       - NO explanations.
     """
     schema = dspy.InputField()
-    requirements = dspy.InputField(desc="Constraints from planner")
+    requirements = dspy.InputField(desc="Context info or requirements")
     question = dspy.InputField()
-    previous_error = dspy.InputField(desc="Error from previous attempt, if any", optional=True)
-    sql_query = dspy.OutputField(desc="The SQL query string only (start with SELECT)")
+    previous_error = dspy.InputField(desc="Error from previous attempt", optional=True)
+    sql_query = dspy.OutputField(desc="The SQL query string only")
 
-# 4. Synthesizer (Robust)
+# 4. Synthesizer Signature
 class SynthesizerSignature(dspy.Signature):
     """
-    Answer the user question based on the provided Context or SQL Results.
-    
-    CRITICAL RULES:
-    1. If the answer is in 'context', USE IT. Do not ask for SQL.
-    2. Output strict JSON format with keys: "explanation", "final_answer".
-    3. CHECK SPELLING: Key must be "explanation", NOT "explanicn".
+    Answer based on Context or SQL Results.
+    Output JSON with keys: "explanation", "final_answer".
     """
     question = dspy.InputField()
-    context = dspy.InputField(desc="Retrieved text chunks (Trust this info!)")
-    sql_query = dspy.InputField(desc="Executed SQL", optional=True)
-    sql_result = dspy.InputField(desc="Result rows from DB", optional=True)
-    format_hint = dspy.InputField(desc="Required output format (e.g., int, float, list)")
+    context = dspy.InputField()
+    sql_query = dspy.InputField(optional=True)
+    sql_result = dspy.InputField(optional=True)
+    format_hint = dspy.InputField()
     
-    explanation = dspy.OutputField(desc="Brief reasoning (Key: 'explanation')")
-    final_answer = dspy.OutputField(desc="The final answer (Key: 'final_answer')")
+    explanation = dspy.OutputField(desc="Reasoning")
+    final_answer = dspy.OutputField(desc="Final answer")
 
-# Define Modules
+# --- MODULES ---
+
 class RouterModule(dspy.Module):
     def __init__(self):
         super().__init__()
@@ -68,6 +73,7 @@ class RouterModule(dspy.Module):
     def forward(self, question):
         return self.prog(question=question)
 
+# [RESTORED] Planner Module
 class PlannerModule(dspy.Module):
     def __init__(self):
         super().__init__()
@@ -78,6 +84,7 @@ class PlannerModule(dspy.Module):
 class SQLModule(dspy.Module):
     def __init__(self):
         super().__init__()
+        # Using ChainOfThought helps the model "plan" the join before writing the SQL
         self.prog = dspy.ChainOfThought(TextToSQLSignature)
     def forward(self, schema, requirements, question, previous_error=""):
         return self.prog(schema=schema, requirements=requirements, question=question, previous_error=previous_error)
