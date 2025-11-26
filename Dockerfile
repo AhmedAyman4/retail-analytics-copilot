@@ -24,6 +24,9 @@ RUN curl -L -o data/northwind.sqlite https://raw.githubusercontent.com/jpwhite3/
 # Copy the rest of the application
 COPY . .
 
+# CRITICAL FIX: Ensure Python knows /code is the root for imports
+ENV PYTHONPATH=/code
+
 # Set permissions for Hugging Face Spaces (they often run as user 1000)
 RUN chown -R 1000:1000 /code
 
