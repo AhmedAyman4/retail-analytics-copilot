@@ -4,11 +4,26 @@ import argparse
 import ast
 import os
 import sys
-# Ensure root is in path
-sys.path.append(os.getcwd())
+import time
+import requests
 
+sys.path.append(os.getcwd())
 from tqdm import tqdm
 from agent.graph_hybrid import HybridAgent
+
+def wait_for_server():
+    """Waits for Ollama server to be ready."""
+    print("Waiting for Ollama (localhost:11434)...")
+    for i in range(30):
+        try:
+            requests.get("http://localhost:11434")
+            print("Server is ready.")
+            return True
+        except:
+            time.sleep(2)
+            print(".", end="", flush=True)
+    print("\nServer check timed out. Proceeding anyway...")
+    return False
 
 def main():
     parser = argparse.ArgumentParser()
@@ -16,19 +31,21 @@ def main():
     parser.add_argument("--out", type=str, required=True, help="Output JSONL file")
     args = parser.parse_args()
 
-    # 1. Setup DSPy with local Hugging Face Model
-    print("Loading local Hugging Face model (microsoft/Phi-3.5-mini-instruct)...")
-    
-    # UPDATED: Use dspy.HF instead of dspy.HFModel
-    lm = dspy.HF(model='microsoft/Phi-3.5-mini-instruct')
-    dspy.settings.configure(lm=lm)
+    wait_for_server()
 
-    # 2. Initialize Agent
+    # Configure DSPy for Ollama
+    print("Configuring DSPy for Ollama (phi3.5:3.8b)...")
+    lm = dspy.LM(
+        model="ollama_chat/phi3.5:3.8b",
+        api_base="http://localhost:11434",
+        api_key=""
+    )
+    dspy.configure(lm=lm)
+
+    # Initialize Agent
     agent_app = HybridAgent().build_graph()
 
-    # 3. Process Batch
     results = []
-    
     with open(args.batch, 'r') as f:
         lines = f.readlines()
 
@@ -40,7 +57,6 @@ def main():
         question = data['question']
         fmt = data['format_hint']
         
-        # Initial State
         initial_state = {
             "question": question,
             "format_hint": fmt,
@@ -48,57 +64,37 @@ def main():
             "sql_error": None
         }
 
-        # Run Graph
         try:
-            output_state = agent_app.invoke(initial_state)
+            output = agent_app.invoke(initial_state)
             
-            # Post-processing answer to match format strictly (basic cleanup)
-            raw_answer = output_state.get("final_answer", "")
-            
-            # Try to safely parse if it looks like python literal
+            raw_answer = output.get("final_answer", "")
             try:
                 if fmt != "str":
-                    # Remove "Final Answer:" prefix if valid
-                    clean_ans = raw_answer.split("Answer:")[-1].strip()
-                    parsed_answer = ast.literal_eval(clean_ans)
+                    clean = str(raw_answer).split("Answer:")[-1].strip()
+                    parsed = ast.literal_eval(clean)
                 else:
-                    parsed_answer = raw_answer
+                    parsed = raw_answer
             except:
-                parsed_answer = raw_answer
+                parsed = raw_answer
 
-            output_record = {
+            res = {
                 "id": qid,
-                "final_answer": parsed_answer,
-                "sql": output_state.get("sql_query", ""),
-                "confidence": 0.0, # Placeholder as allowed by constraints
-                "explanation": output_state.get("explanation", ""),
-                "citations": output_state.get("citations", [])
+                "final_answer": parsed,
+                "sql": output.get("sql_query", ""),
+                "explanation": output.get("explanation", ""),
+                "citations": output.get("citations", [])
             }
-            
-            # Simple confidence heuristic
-            if output_state.get("sql_error"):
-                output_record["confidence"] = 0.1
-            elif output_state.get("classification") == "sql" and output_state.get("sql_result"):
-                output_record["confidence"] = 0.9
-            else:
-                output_record["confidence"] = 0.7
-
-            results.append(output_record)
+            results.append(res)
 
         except Exception as e:
-            print(f"Error processing {qid}: {e}")
-            results.append({
-                "id": qid,
-                "final_answer": None,
-                "error": str(e)
-            })
+            print(f"Error {qid}: {e}")
+            results.append({"id": qid, "error": str(e)})
 
-    # 4. Write Output
     with open(args.out, 'w') as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
 
-    print(f"Done. Results written to {args.out}")
+    print(f"Results written to {args.out}")
 
 if __name__ == "__main__":
     main()
