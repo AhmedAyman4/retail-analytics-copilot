@@ -34,9 +34,9 @@ def main():
     wait_for_server()
 
     # Configure DSPy for Ollama
-    print("Configuring DSPy for Ollama (llama3.2:3b)...")
+    print("Configuring DSPy for Ollama (phi3.5:3.8b)...")
     lm = dspy.LM(
-        model="ollama/llama3.2:3b",
+        model="ollama/phi3.5:3.8b",
         api_base="http://localhost:11434",
         api_key=""
     )
