@@ -4,6 +4,8 @@ import os
 import sys
 import time
 import requests
+import json
+import ast
 
 # Ensure the root path is in pythonpath
 sys.path.append(os.getcwd())
@@ -16,6 +18,11 @@ st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
 # --- Sidebar Configuration ---
 st.sidebar.title("⚙️ Configuration")
 
+# 1. App Mode Selection
+app_mode = st.sidebar.selectbox("App Mode", ["Interactive Chat", "Batch Evaluation"])
+
+# 2. Model Provider Selection
+st.sidebar.divider()
 model_option = st.sidebar.radio(
     "Select Model Provider",
     ["Ollama (Local)", "Google Gemini"],
@@ -24,30 +31,16 @@ model_option = st.sidebar.radio(
 
 gemini_key = None
 if model_option == "Google Gemini":
-    # 1. Try System Environment Variable (Hugging Face Secrets / Docker)
     env_key = os.getenv("GOOGLE_API_KEY")
-    
-    # 2. Try Streamlit Secrets (Streamlit Cloud / .streamlit/secrets.toml)
     secrets_key = None
     try:
         if "GOOGLE_API_KEY" in st.secrets:
             secrets_key = st.secrets["GOOGLE_API_KEY"]
-    except FileNotFoundError:
-        pass 
     except Exception:
         pass 
 
-    # prioritize Env var, then Secrets
     gemini_key = env_key or secrets_key
     
-    # Debug Expander to help you see what is happening
-    with st.sidebar.expander("🔐 Secrets Debugger"):
-        st.write(f"**Env Var found:** {'Yes' if env_key else 'No'}")
-        st.write(f"**St.Secrets found:** {'Yes' if secrets_key else 'No'}")
-        if not gemini_key:
-            st.error("No key found in either location.")
-            st.info("If on HuggingFace: Settings -> Variables and Secrets -> New Secret. Name: GOOGLE_API_KEY. Value: Your Key. **Then Restart Space**.")
-
     if gemini_key:
         st.sidebar.success("✅ API Key active")
     else:
@@ -65,13 +58,12 @@ def load_agent_resources(provider, gemini_key=None):
     if provider == "Ollama (Local)":
         target_model = "phi3.5:3.8b"
         target_model_name = target_model
-        status.info(f"Waiting for Ollama server to come online at localhost:11434...")
+        status.info(f"Waiting for Ollama server...")
         
         server_url = "http://localhost:11434"
         max_retries = 30
         server_ready = False
         
-        # 1. Wait for Ollama Server
         for _ in range(max_retries):
             try:
                 response = requests.get(server_url)
@@ -83,33 +75,11 @@ def load_agent_resources(provider, gemini_key=None):
             time.sleep(1)
             
         if not server_ready:
-            status.error("Failed to connect to Ollama. Check logs.")
+            status.error("Failed to connect to Ollama.")
             return None, None, None
 
-        # 2. Wait for Model Download
-        status.info(f"Ollama is online. Checking for model '{target_model}'...")
-        model_ready = False
-        pull_retries = 150
-        
-        for i in range(pull_retries):
-            try:
-                tags_response = requests.get(f"{server_url}/api/tags")
-                if tags_response.status_code == 200:
-                    tags_data = tags_response.json()
-                    models = [m.get('name') for m in tags_data.get('models', [])]
-                    if any(target_model in m for m in models):
-                        model_ready = True
-                        break
-            except Exception:
-                pass
-            
-            status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
-            time.sleep(2)
-
-        if not model_ready:
-            status.error("Model download timed out or failed.")
-            return None, None, None
-
+        status.info(f"Ollama online. Checking model '{target_model}'...")
+        # Check model existence (Simplified for speed)
         try:
             lm = dspy.LM(
                 model=f"ollama/{target_model}",
@@ -125,32 +95,20 @@ def load_agent_resources(provider, gemini_key=None):
         target_model_name = "gemini-2.5-flash"
         if not gemini_key:
             return None, None, None 
-        
-        status.info("Connecting to Google Gemini...")
         try:
             lm = dspy.LM("gemini/gemini-2.5-flash", api_key=gemini_key)
         except Exception as e:
             status.error(f"Failed to initialize Gemini: {e}")
             return None, None, None
 
-    status.info(f"Model ({target_model_name}) ready! Configuring Agent...")
+    status.info(f"Model ready! Configuring Agent...")
     
     try:
-        # REMOVED dspy.configure(lm=lm) to avoid thread errors
-        # We will apply the LM using a context manager during execution
-        
-        # Instantiate the class
         agent_instance = HybridAgent()
-        
-        # Build the graph
-        # Note: If build_graph makes LLM calls during init, we might need to wrap this too.
-        # Assuming build_graph is structural only.
         agent_workflow = agent_instance.build_graph()
-        
-        status.success(f"Agent Connected & Ready! (Model: {target_model_name})")
+        status.success(f"Ready! ({target_model_name})")
         time.sleep(1)
         status.empty() 
-        
         return agent_workflow, agent_instance, lm
         
     except Exception as e:
@@ -160,108 +118,180 @@ def load_agent_resources(provider, gemini_key=None):
 # Load resources
 agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option, gemini_key)
 
-# --- UI Layout ---
+# --- Main Title ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
 
-# Sidebar Debug
-with st.sidebar:
-    st.divider()
-    st.header("Debug Info")
-    
-    if model_option == "Ollama (Local)":
-        st.info("Backend: Ollama (Port 11434)")
-        st.info("Model: phi3.5:3.8b")
-    else:
-        st.info("Backend: Google Vertex/AI Studio")
-        st.info("Model: gemini-2.5-flash")
-    
-    if st.button("Test LLM Connection"):
-        if lm_instance:
-            with st.spinner("Testing simple prompt..."):
+# ==========================================
+# MODE 1: INTERACTIVE CHAT
+# ==========================================
+if app_mode == "Interactive Chat":
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if "details" in message:
+                with st.expander("Show Logic & Data"):
+                    st.json(message["details"])
+
+    if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        if not agent_workflow:
+            st.error("Agent failed to load.")
+        else:
+            with st.chat_message("assistant"):
+                status_container = st.status("🚀 **Agent Working...**", expanded=True)
+                def stream_callback(msg):
+                    status_container.write(msg)
+                
+                agent_instance.status_callback = stream_callback
+                
                 try:
-                    # Direct call to LM doesn't strictly need context, but good practice
-                    res = lm_instance("Say hello!", max_tokens=10)
-                    st.success(f"Success! Model replied: {res}")
+                    initial_state = {
+                        "question": prompt,
+                        "format_hint": "str",
+                        "retries": 0,
+                        "sql_error": None
+                    }
+                    
+                    with dspy.context(lm=lm_instance):
+                        output = agent_workflow.invoke(initial_state)
+                    
+                    status_container.update(label="✅ **Analysis Complete!**", state="complete", expanded=False)
+                    
+                    final_ans = output.get("final_answer", "No answer.")
+                    explanation = output.get("explanation", "")
+                    
+                    full_response = f"**Answer:** {final_ans}\n\n_{explanation}_"
+                    st.markdown(full_response)
+                    
+                    details = {
+                        "sql": output.get("sql_query"),
+                        "citations": output.get("citations"),
+                        "sql_error": output.get("sql_error"),
+                        "classification": output.get("classification")
+                    }
+                    
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": full_response,
+                        "details": details
+                    })
+                    
                 except Exception as e:
-                    st.error(f"Connection Failed: {e}")
-        else:
-            st.warning("Model not loaded yet.")
+                    status_container.update(label="❌ **Error**", state="error")
+                    st.error(f"An error occurred: {str(e)}")
+                finally:
+                    agent_instance.status_callback = None
 
-    if st.checkbox("Show Schema"):
+# ==========================================
+# MODE 2: BATCH EVALUATION
+# ==========================================
+elif app_mode == "Batch Evaluation":
+    st.header("📂 Batch File Evaluation")
+    st.markdown("Upload a `.jsonl` file to run the agent on multiple questions.")
+
+    uploaded_file = st.file_uploader("Upload Questions", type=["jsonl", "json"])
+
+    if uploaded_file and agent_workflow:
+        # Load and Preview Data
         try:
-            from agent.tools.sqlite_tool import SQLiteTool
-            st.code(SQLiteTool().get_schema_info())
-        except ImportError:
-            st.warning("SQLiteTool not found in path")
-
-# Chat History
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if "details" in message:
-            with st.expander("Show Logic & Data"):
-                st.json(message["details"])
-
-# Input
-if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    if not agent_workflow:
-        if model_option == "Google Gemini" and not gemini_key:
-            st.error("Please enter a Gemini API Key in the sidebar or check your Secrets configuration.")
-        else:
-            st.error("Agent failed to load. Check settings.")
-    else:
-        with st.chat_message("assistant"):
+            lines = uploaded_file.getvalue().decode("utf-8").strip().split('\n')
+            questions = [json.loads(line) for line in lines if line.strip()]
+            st.success(f"Loaded {len(questions)} questions.")
             
-            status_container = st.status("🚀 **Agent Working...**", expanded=True)
-            
-            def stream_callback(msg):
-                status_container.write(msg)
-            
-            agent_instance.status_callback = stream_callback
-            
-            try:
-                initial_state = {
-                    "question": prompt,
-                    "format_hint": "str",
-                    "retries": 0,
-                    "sql_error": None
-                }
+            with st.expander("Preview Input Data"):
+                st.json(questions[:2])
                 
-                # --- CRITICAL FIX: USE CONTEXT MANAGER ---
-                # This applies the LM only for this block of code, avoiding global thread locking issues
-                with dspy.context(lm=lm_instance):
-                    output = agent_workflow.invoke(initial_state)
+        except Exception as e:
+            st.error(f"Error parsing file: {e}")
+            questions = []
+
+        if questions:
+            if st.button(f"Run Agent on {len(questions)} Questions"):
+                results = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                status_container.update(label="✅ **Analysis Complete!**", state="complete", expanded=False)
+                # --- PROCESSING LOOP ---
+                for idx, item in enumerate(questions):
+                    status_text.text(f"Processing {idx+1}/{len(questions)}: {item.get('id')}...")
+                    
+                    try:
+                        # Prepare State
+                        initial_state = {
+                            "question": item['question'],
+                            "format_hint": item.get('format_hint', 'str'),
+                            "retries": 0,
+                            "sql_error": None
+                        }
+                        
+                        # Run Agent (Silent Mode - no callbacks to speed up)
+                        agent_instance.status_callback = None 
+                        
+                        with dspy.context(lm=lm_instance):
+                            output = agent_workflow.invoke(initial_state)
+                        
+                        # Parse Final Answer (Handle types)
+                        final_ans = output.get("final_answer")
+                        # Try to parse stringified lists/dicts if format hint suggests complex types
+                        if isinstance(final_answer, str) and item.get('format_hint') != 'str':
+                             try:
+                                 # Clean up markdown code blocks if present
+                                 clean_ans = final_ans.replace("```json", "").replace("```", "").strip()
+                                 # Heuristic: try ast.literal_eval if it looks like a structure
+                                 if "{" in clean_ans or "[" in clean_ans:
+                                     final_ans = ast.literal_eval(clean_ans)
+                             except:
+                                 pass
+
+                        # Calculate Confidence Heuristic
+                        confidence = 0.7
+                        if output.get("sql_error"):
+                            confidence = 0.1
+                        elif output.get("classification") == "sql" and output.get("sql_result"):
+                            confidence = 0.9
+
+                        # Build Record
+                        record = {
+                            "id": item['id'],
+                            "final_answer": final_ans,
+                            "sql": output.get("sql_query", ""),
+                            "confidence": confidence,
+                            "explanation": output.get("explanation", ""),
+                            "citations": output.get("citations", [])
+                        }
+                        results.append(record)
+                        
+                    except Exception as e:
+                        st.error(f"Error on ID {item.get('id')}: {e}")
+                        results.append({
+                            "id": item.get('id'),
+                            "error": str(e),
+                            "final_answer": None,
+                            "confidence": 0.0,
+                            "citations": []
+                        })
+                    
+                    # Update Progress
+                    progress_bar.progress((idx + 1) / len(questions))
+
+                status_text.text("Processing Complete!")
+                st.success("✅ Evaluation Finished.")
+
+                # --- DISPLAY RESULTS & DOWNLOAD ---
+                result_jsonl = "\n".join([json.dumps(r) for r in results])
                 
-                final_ans = output.get("final_answer", "No answer.")
-                explanation = output.get("explanation", "")
+                st.download_button(
+                    label="⬇️ Download outputs.jsonl",
+                    data=result_jsonl,
+                    file_name="outputs_hybrid.jsonl",
+                    mime="application/json"
+                )
                 
-                full_response = f"**Answer:** {final_ans}\n\n_{explanation}_"
-                st.markdown(full_response)
-                
-                details = {
-                    "sql": output.get("sql_query"),
-                    "citations": output.get("citations"),
-                    "sql_error": output.get("sql_error"),
-                    "classification": output.get("classification")
-                }
-                
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": full_response,
-                    "details": details
-                })
-                
-            except Exception as e:
-                status_container.update(label="❌ **Error**", state="error")
-                st.error(f"An error occurred: {str(e)}")
-            finally:
-                agent_instance.status_callback = None
+                with st.expander("View Results"):
+                    st.json(results)
