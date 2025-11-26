@@ -2,6 +2,10 @@ import streamlit as st
 import dspy
 import os
 import json
+# Ensure the root path is in pythonpath if running directly
+import sys
+sys.path.append(os.getcwd())
+
 from agent.graph_hybrid import HybridAgent
 
 # Page Config
@@ -19,7 +23,8 @@ def load_agent_resources():
     
     # Load Model (CPU friendly-ish, but requires ~8GB RAM)
     try:
-        lm = dspy.HFModel(model='microsoft/Phi-3.5-mini-instruct')
+        # UPDATED: Use dspy.HF instead of dspy.HFModel
+        lm = dspy.HF(model='microsoft/Phi-3.5-mini-instruct')
         dspy.settings.configure(lm=lm)
         
         # Initialize the Graph
