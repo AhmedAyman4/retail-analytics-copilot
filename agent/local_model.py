@@ -52,16 +52,23 @@ class LocalPhi(dspy.LM):
         """
         # 1. Handle "messages" (Chat format) if "prompt" is missing
         if prompt is None and messages is not None:
-            # Basic conversion of chat messages to a string prompt
-            # (Phi-3 supports chat templates, but simple concatenation works for this agent context)
-            prompt = ""
-            for m in messages:
-                role = m.get('role', 'user')
-                content = m.get('content', '')
-                prompt += f"<|{role}|>\n{content}\n"
-            prompt += "<|assistant|>\n"
+            # Use tokenizer's chat template for correct Phi-3 formatting
+            try:
+                prompt = self.tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False, 
+                    add_generation_prompt=True
+                )
+            except Exception:
+                # Fallback manual construction if template fails
+                prompt = ""
+                for m in messages:
+                    role = m.get('role', 'user') or 'user'
+                    content = m.get('content', '')
+                    prompt += f"<|{role}|>\n{content}<|end|>\n"
+                prompt += "<|assistant|>\n"
             
-        # 2. Fallback if both are missing (should not happen in normal usage)
+        # 2. Fallback if both are missing
         if prompt is None:
             prompt = ""
 
