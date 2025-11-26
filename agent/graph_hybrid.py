@@ -3,7 +3,6 @@ from typing import TypedDict, List, Any, Dict, Literal, Callable, Optional
 from langgraph.graph import StateGraph, END
 import logging
 
-# Setup basic logging to console
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -42,17 +41,15 @@ class HybridAgent:
         self.sql_gen = SQLModule()
         self.synth = SynthesizerModule()
         
-        # Callback placeholder (will be set from Streamlit)
         self.status_callback: Optional[Callable[[str], None]] = None
 
     def log(self, message: str):
-        """Helper to log to both console and UI callback"""
         logger.info(message)
         if self.status_callback:
             try:
                 self.status_callback(message)
             except Exception:
-                pass # safely ignore UI update failures
+                pass
 
     def router_node(self, state: AgentState):
         self.log(f"🚦 **Router:** Classifying intent for: '{state['question']}'...")
@@ -67,6 +64,12 @@ class HybridAgent:
         self.log("📚 **Retriever:** Searching documentation...")
         chunks = self.retriever.search(state["question"], k=3)
         self.log(f"✅ **Retriever:** Found {len(chunks)} relevant documents.")
+        
+        # UPDATED: Log the content snippet so user can verify RAG worked
+        if chunks:
+            snippet = chunks[0]['text'][:200].replace('\n', ' ')
+            self.log(f"📄 *Top Context:* \"{snippet}...\"")
+            
         return {"rag_chunks": chunks}
 
     def planner_node(self, state: AgentState):
@@ -101,13 +104,12 @@ class HybridAgent:
         else:
             row_count = len(results)
             self.log(f"✅ **Executor:** Query successful. Returned {row_count} rows.")
-            # Preview first row if exists
             if row_count > 0:
                 self.log(f"🔍 *Result Preview:* `{str(results[0])[:100]}...`")
             return {"sql_result": results, "sql_error": None}
 
     def synthesizer_node(self, state: AgentState):
-        self.log("✍️ **Synthesizer:** Formulating final answer...")
+        self.log("✍️ **Synthesizer:** Formulating final answer (Reasoning first)...")
         context_text = "\n".join([c['text'] for c in state.get("rag_chunks", [])])
         sql_q = state.get("sql_query", "")
         sql_res = str(state.get("sql_result", []))
@@ -130,7 +132,7 @@ class HybridAgent:
         
         return {
             "final_answer": pred.final_answer, 
-            "explanation": pred.explanation,
+            "explanation": pred.explanation, # This will now contain the Chain of Thought
             "citations": list(set(citations))
         }
 
