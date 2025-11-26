@@ -39,7 +39,8 @@ def load_agent_resources():
         return None, None, None
 
     # 2. Wait for Model Download (since we backgrounded the pull)
-    status.info("Ollama is online. Checking for model 'phi3.5:3.8b'...")
+    target_model = "llama3.2:3b"
+    status.info(f"Ollama is online. Checking for model '{target_model}'...")
     model_ready = False
     pull_retries = 150 # Wait up to 5 minutes for download
     
@@ -51,13 +52,13 @@ def load_agent_resources():
                 tags_data = tags_response.json()
                 models = [m.get('name') for m in tags_data.get('models', [])]
                 # Check for exact or partial match
-                if any("phi3.5:3.8b" in m for m in models):
+                if any(target_model in m for m in models):
                     model_ready = True
                     break
         except Exception:
             pass
         
-        status.info(f"Downloading model 'phi3.5:3.8b'... (Time elapsed: {i*2}s)")
+        status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
         time.sleep(2)
 
     if not model_ready:
@@ -68,7 +69,7 @@ def load_agent_resources():
     
     try:
         lm = dspy.LM(
-            model="ollama/phi3.5:3.8b",
+            model=f"ollama/{target_model}",
             api_base="http://localhost:11434", 
             api_key="",
         )
@@ -80,7 +81,7 @@ def load_agent_resources():
         # Build the graph
         agent_workflow = agent_instance.build_graph()
         
-        status.success("Agent Connected & Ready!")
+        status.success(f"Agent Connected & Ready! (Model: {target_model})")
         time.sleep(1)
         status.empty() 
         
@@ -101,6 +102,7 @@ st.title("🛍️ Northwind Retail Analytics Copilot")
 with st.sidebar:
     st.header("Debug Info")
     st.info("Backend: Ollama (Port 11434)")
+    st.info("Model: llama3.2:3b")
     
     if st.button("Test LLM Connection"):
         with st.spinner("Testing simple prompt..."):
