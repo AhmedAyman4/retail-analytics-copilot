@@ -61,7 +61,6 @@ class HybridAgent:
         self.log(f"✅ **Retriever:** Found {len(chunks)} relevant documents.")
         
         if chunks:
-            # Clean up newlines for display
             snippet = chunks[0]['text'][:150].replace('\n', ' ')
             self.log(f"📄 *Top Context:* \"{snippet}...\"")
             
@@ -87,6 +86,18 @@ class HybridAgent:
         )
         
         clean_sql = pred.sql_query.replace("```sql", "").replace("```", "").strip()
+        
+        # --- HEURISTIC REPAIRS (Safety Net) ---
+        # 1. Fix common typo BETWE0N -> BETWEEN
+        clean_sql = clean_sql.replace("BETWE0N", "BETWEEN")
+        
+        # 2. Fix table names if model ignores friendly views
+        clean_sql = clean_sql.replace("OrderDetails", "order_details")
+        clean_sql = clean_sql.replace('"Order Details"', "order_details")
+        clean_sql = clean_sql.replace("Orders", "orders")
+        clean_sql = clean_sql.replace("Products", "products")
+        clean_sql = clean_sql.replace("Categories", "categories")
+        
         self.log(f"📝 **Generated SQL:**\n```sql\n{clean_sql}\n```")
         return {"sql_query": clean_sql}
 
@@ -118,21 +129,17 @@ class HybridAgent:
             explanation = pred.explanation
 
         except Exception as e:
-            # CRITICAL RECOVERY LOGIC
-            # If DSPy fails to parse JSON (e.g. 'explanicn'), we parse the raw error message
-            # The error message usually contains: "LM Response: {...}"
+            # Error recovery for JSON parsing
             err_str = str(e)
             self.log(f"⚠️ **JSON Parse Warning:** {err_str[:100]}... Attempting repair.")
             
             final_answer = "Error generating answer."
             explanation = "Failed to parse model output."
             
-            # 1. Try to find JSON blob in error
             json_match = re.search(r'LM Response: ({.*})', err_str, re.DOTALL)
             if json_match:
                 raw_json = json_match.group(1)
                 try:
-                    # Fix common typo "explanicn" -> "explanation"
                     raw_json = raw_json.replace("explanicn", "explanation")
                     data = json.loads(raw_json)
                     final_answer = data.get("final_answer", final_answer)
@@ -146,8 +153,8 @@ class HybridAgent:
         for c in state.get("rag_chunks", []):
             citations.append(c['id'])
         if sql_q:
-            for table in ["Orders", "Order Details", "Products", "Customers"]:
-                if table.lower() in sql_q.lower() or f'"{table}"' in sql_q:
+            for table in ["orders", "order_details", "products", "categories", "customers"]:
+                if table.lower() in sql_q.lower():
                     citations.append(table)
         
         return {
