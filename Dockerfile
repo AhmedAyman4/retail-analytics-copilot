@@ -1,46 +1,51 @@
-# Use a Python base image (3.10 is stable)
+# Use standard Python image (much lighter than nvidia/cuda)
 FROM python:3.10-slim
 
-# Set working directory
 WORKDIR /code
 
-# Set environment variables
-# 1. Force Python to verify /code is a package root
+# 1. Environment Variables
 ENV PYTHONPATH=/code
-# 2. Set Hugging Face cache to a directory we can control
-ENV HF_HOME=/code/.cache/huggingface
-# 3. Standard Python settings
 ENV PYTHONUNBUFFERED=1
+# Set OLLAMA_HOST so it listens on all interfaces (internal convenience)
+ENV OLLAMA_HOST=0.0.0.0
 
-# Install system dependencies (curl for downloading DB)
-RUN apt-get update && apt-get install -y \
-    curl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# 2. System Deps & Ollama Install
+# We install curl to download ollama script
+RUN apt-get update && apt-get install -y curl build-essential && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# 3. Install Python Deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories explicitly
-# We create the cache directory here so we can chown it later
-RUN mkdir -p data docs agent .cache
+# 4. Create Directory Structure
+RUN mkdir -p data docs agent .ollama
 
-# Download the Northwind Database
+# 5. Download DB
 RUN curl -L -o data/northwind.sqlite https://raw.githubusercontent.com/jpwhite3/northwind-SQLite3/main/dist/northwind.db
 
-# Copy the rest of the application
+# 6. Copy Code
 COPY . .
 
-# CRITICAL FIX: Change ownership of the ENTIRE /code directory to user 1000
-# This ensures the user can write to the cache directory we defined above
+# 7. Permissions for User 1000 (Hugging Face Spaces requirement)
+# We also ensure the .ollama directory is writable by the user
+RUN useradd -m -u 1000 user
 RUN chown -R 1000:1000 /code
+RUN mkdir -p /home/user/.ollama && chown -R 1000:1000 /home/user/.ollama
+# Set HOME to ensure ollama writes models to the user's dir
+ENV HOME=/home/user
 
-# Switch to non-root user
+# Copy and enable start script
+COPY start_services.sh .
+RUN chmod +x start_services.sh
+
 USER 1000
 
-# Expose the port Streamlit runs on
+# Expose ports
 EXPOSE 7860
+EXPOSE 11434
 
-# Command to run the application
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=7860"]
+# Entrypoint
+CMD ["./start_services.sh"]
