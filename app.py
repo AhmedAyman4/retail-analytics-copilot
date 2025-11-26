@@ -2,10 +2,12 @@ import streamlit as st
 import dspy
 import os
 import sys
+
 # Ensure the root path is in pythonpath if running directly
 sys.path.append(os.getcwd())
 
 from agent.graph_hybrid import HybridAgent
+from agent.local_model import LocalPhi # Import our custom class
 
 # Page Config
 st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
@@ -14,28 +16,23 @@ st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
 @st.cache_resource
 def load_agent_resources():
     """
-    Loads the Hugging Face model and initializes the Agent Graph.
-    This is cached to prevent reloading the heavy model on every interaction.
+    Loads the local Phi model and initializes the Agent Graph.
     """
     status = st.empty()
-    status.info("Loading Microsoft Phi-3.5 model... (This may take a minute)")
+    status.info("Loading Microsoft Phi-3.5 model locally... (This consumes ~7GB RAM)")
     
-    # Load Model (CPU friendly-ish, but requires ~8GB RAM)
     try:
-        # FIX: Use dspy.LM and dspy.configure as requested for newer DSPy versions
-        # We explicitly assume dspy.LM handles the local HF loading or the user environment is set up for it.
-        # If running strictly local weights without a server, dspy.HuggingFace might still be needed in some versions,
-        # but we follow the instruction to use dspy.LM.
-        lm = dspy.LM(model='microsoft/Phi-3.5-mini-instruct')
+        # UPDATED: Use our custom LocalPhi class
+        lm = LocalPhi(model_name='microsoft/Phi-3.5-mini-instruct')
         
-        # FIX: Use dspy.configure instead of dspy.settings.configure
+        # Configure DSPy to use it
         dspy.configure(lm=lm)
         
         # Initialize the Graph
         agent_workflow = HybridAgent().build_graph()
         
-        status.success("Model and Agent loaded successfully!")
-        status.empty() # Clear the status message
+        status.success("Local Model and Agent loaded successfully!")
+        status.empty() 
         return agent_workflow
     except Exception as e:
         status.error(f"Failed to load model: {e}")
@@ -48,7 +45,7 @@ agent_app = load_agent_resources()
 st.title("🛍️ Northwind Retail Analytics Copilot")
 st.markdown("""
 Ask questions about sales, products, marketing calendars, and KPIs.
-*Backed by local RAG + SQLite + Phi-3.5*
+*Backed by local RAG + SQLite + Phi-3.5 (Running locally)*
 """)
 
 # Sidebar for debug/info
@@ -88,7 +85,7 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                 # Initial State for the Graph
                 initial_state = {
                     "question": prompt,
-                    "format_hint": "str", # Default to string for chat interface
+                    "format_hint": "str", 
                     "retries": 0,
                     "sql_error": None
                 }
