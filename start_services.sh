@@ -14,8 +14,8 @@ done
 
 # 3. Pull Model in BACKGROUND (&)
 # This allows Streamlit to start immediately so the Space doesn't crash.
-echo "Triggering background pull of phi3.5:3.8b..."
-ollama pull phi3.5:3.8b &
+echo "Triggering background pull of llama3.2:3b..."
+ollama pull llama3.2:3b &
 
 # 4. Start Streamlit immediately
 echo "Starting Streamlit..."
