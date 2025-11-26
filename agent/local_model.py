@@ -21,7 +21,7 @@ class LocalPhi(dspy.LM):
         # Load Tokenizer & Model
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
-        # 2. FIX: Assign the loaded model object to 'self.hf_model' instead of 'self.model'
+        # 2. Assign the loaded model object to 'self.hf_model' instead of 'self.model'
         # This prevents the "AttributeError: object has no attribute 'split'"
         self.hf_model = AutoModelForCausalLM.from_pretrained(
             model_name, 
@@ -33,7 +33,7 @@ class LocalPhi(dspy.LM):
         # Create Pipeline
         self.pipe = pipeline(
             "text-generation",
-            model=self.hf_model, # Use the renamed attribute
+            model=self.hf_model, 
             tokenizer=self.tokenizer,
             max_new_tokens=max_tokens,
             return_full_text=False
@@ -46,9 +46,11 @@ class LocalPhi(dspy.LM):
             "do_sample": False # Deterministic for agents
         }
 
-    def basic_request(self, prompt: str, **kwargs):
+    def basic_request(self, prompt, **kwargs):
         """
         The method DSPy calls to generate text.
+        We do NOT override __call__ here; we let dspy.LM handle the calling interface
+        and delegate to this method.
         """
         # Merge default kwargs with request kwargs
         gen_kwargs = {**self.kwargs, **kwargs}
@@ -57,6 +59,10 @@ class LocalPhi(dspy.LM):
         gen_kwargs.pop('n', None) 
         
         try:
+            # Ensure prompt is a string (DSPy might pass other types in rare cases)
+            if not prompt:
+                return [""]
+                
             # Phi-3.5 works best with a chat template, but pure string prompting is supported.
             output = self.pipe(prompt, **gen_kwargs)
             generated_text = output[0]['generated_text']
@@ -66,6 +72,3 @@ class LocalPhi(dspy.LM):
         except Exception as e:
             print(f"Error during generation: {e}")
             return [""]
-
-    def __call__(self, prompt, **kwargs):
-        return self.basic_request(prompt, **kwargs)
