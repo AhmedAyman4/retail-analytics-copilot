@@ -1,25 +1,24 @@
 #!/bin/bash
 
-# 1. Start Ollama Server in the background
+# 1. Start Ollama Server
 echo "Starting Ollama Server..."
 ollama serve &
-
-# Save PID
 SERVER_PID=$!
 
-# 2. Wait for Ollama to be responsive
+# 2. Wait for Ollama API to be up
 echo "Waiting for Ollama API..."
 until curl -s http://localhost:11434 > /dev/null; do
     sleep 2
-    echo "Waiting..."
+    echo "Waiting for localhost:11434..."
 done
 
-# 3. Pull the requested model
-echo "Pulling model phi3.5:3.8b (this may take a while)..."
-ollama pull phi3.5:3.8b
+# 3. Pull Model in BACKGROUND (&)
+# This allows Streamlit to start immediately so the Space doesn't crash.
+echo "Triggering background pull of phi3.5:3.8b..."
+ollama pull phi3.5:3.8b &
 
-# 4. Start Streamlit (Foreground process)
-echo "Starting Streamlit App..."
+# 4. Start Streamlit immediately
+echo "Starting Streamlit..."
 streamlit run app.py --server.address=0.0.0.0 --server.port=7860
 
 # Cleanup
