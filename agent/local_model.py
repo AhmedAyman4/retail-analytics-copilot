@@ -44,49 +44,46 @@ class LocalPhi(dspy.LM):
             "do_sample": False # Deterministic for agents
         }
 
-    def __call__(self, prompt=None, messages=None, **kwargs):
-        """
-        Override __call__ to strictly enforce local execution.
-        We handle both 'prompt' (string) and 'messages' (list) inputs 
-        to satisfy different DSPy calling patterns.
-        """
-        # 1. Handle "messages" (Chat format) if "prompt" is missing
-        if prompt is None and messages is not None:
-            # Use tokenizer's chat template for correct Phi-3 formatting
-            try:
-                prompt = self.tokenizer.apply_chat_template(
-                    messages, 
-                    tokenize=False, 
-                    add_generation_prompt=True
-                )
-            except Exception:
-                # Fallback manual construction if template fails
-                prompt = ""
-                for m in messages:
-                    role = m.get('role', 'user') or 'user'
-                    content = m.get('content', '')
-                    prompt += f"<|{role}|>\n{content}<|end|>\n"
-                prompt += "<|assistant|>\n"
-            
-        # 2. Fallback if both are missing
-        if prompt is None:
-            prompt = ""
-
-        # 3. Delegate to basic_request
-        return self.basic_request(prompt, **kwargs)
-
     def basic_request(self, prompt, **kwargs):
         """
         The method that actually runs the pipeline.
+        We do NOT override __call__ here; we let dspy.LM handle the calling interface
+        (history, callbacks, etc.) and delegate to this method.
         """
-        # Merge default kwargs with request kwargs
+        # 1. Handle "messages" (Chat format) if "prompt" is missing/empty
+        # DSPy often passes 'messages' in kwargs when using Chat logic
+        if not prompt and "messages" in kwargs:
+            messages = kwargs.get("messages")
+            if messages:
+                # Use tokenizer's chat template for correct Phi-3 formatting
+                try:
+                    prompt = self.tokenizer.apply_chat_template(
+                        messages, 
+                        tokenize=False, 
+                        add_generation_prompt=True
+                    )
+                except Exception:
+                    # Fallback manual construction if template fails
+                    prompt = ""
+                    for m in messages:
+                        role = m.get('role', 'user') or 'user'
+                        content = m.get('content', '')
+                        prompt += f"<|{role}|>\n{content}<|end|>\n"
+                    prompt += "<|assistant|>\n"
+        
+        # 2. Fallback if prompt is still None (safety check)
+        if prompt is None:
+            prompt = ""
+
+        # 3. Merge args
         gen_kwargs = {**self.kwargs, **kwargs}
         
         # Remove DSPy-specific args that transformers doesn't like
         gen_kwargs.pop('n', None) 
+        gen_kwargs.pop('messages', None) # Don't pass messages to string-based pipeline
         
         try:
-            if not prompt:
+            if not prompt.strip():
                 return [""]
                 
             output = self.pipe(prompt, **gen_kwargs)
