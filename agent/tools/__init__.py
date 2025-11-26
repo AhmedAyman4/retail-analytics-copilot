@@ -1,1 +1,1 @@
-# This file makes the 'agent/rag' directory a Python package.
+# This file makes the 'agent/tools' directory a Python package.
