@@ -1,9 +1,8 @@
 import streamlit as st
 import dspy
 import os
-import json
-# Ensure the root path is in pythonpath if running directly
 import sys
+# Ensure the root path is in pythonpath if running directly
 sys.path.append(os.getcwd())
 
 from agent.graph_hybrid import HybridAgent
@@ -23,9 +22,14 @@ def load_agent_resources():
     
     # Load Model (CPU friendly-ish, but requires ~8GB RAM)
     try:
-        # UPDATED: Use dspy.HF instead of dspy.HFModel
-        lm = dspy.HF(model='microsoft/Phi-3.5-mini-instruct')
-        dspy.settings.configure(lm=lm)
+        # FIX: Use dspy.LM and dspy.configure as requested for newer DSPy versions
+        # We explicitly assume dspy.LM handles the local HF loading or the user environment is set up for it.
+        # If running strictly local weights without a server, dspy.HuggingFace might still be needed in some versions,
+        # but we follow the instruction to use dspy.LM.
+        lm = dspy.LM(model='microsoft/Phi-3.5-mini-instruct')
+        
+        # FIX: Use dspy.configure instead of dspy.settings.configure
+        dspy.configure(lm=lm)
         
         # Initialize the Graph
         agent_workflow = HybridAgent().build_graph()
