@@ -13,7 +13,7 @@ from agent.graph_hybrid import HybridAgent
 # Page Config
 st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
 
-# --- Sidebar Configuration (Moved up to pass variables) ---
+# --- Sidebar Configuration ---
 st.sidebar.title("⚙️ Configuration")
 
 model_option = st.sidebar.radio(
@@ -24,14 +24,12 @@ model_option = st.sidebar.radio(
 
 api_key = None
 if model_option == "Google Gemini":
-    # Try to get from environment variable first, otherwise ask user
     default_key = os.getenv("GOOGLE_API_KEY", "")
     api_key = st.sidebar.text_input("Enter Gemini API Key", value=default_key, type="password")
     if not api_key:
         st.sidebar.warning("⚠️ API Key required for Gemini")
 
 # --- Initialize Agent & Model (Cached) ---
-# We add arguments to the function so Streamlit caches separate instances for Ollama vs Gemini
 @st.cache_resource(show_spinner=False) 
 def load_agent_resources(provider, gemini_key=None):
     status = st.empty()
@@ -48,7 +46,6 @@ def load_agent_resources(provider, gemini_key=None):
         max_retries = 30
         server_ready = False
         
-        # 1. Wait for Ollama Server
         for _ in range(max_retries):
             try:
                 response = requests.get(server_url)
@@ -63,7 +60,6 @@ def load_agent_resources(provider, gemini_key=None):
             status.error("Failed to connect to Ollama. Check logs.")
             return None, None, None
 
-        # 2. Wait for Model Download
         status.info(f"Ollama is online. Checking for model '{target_model}'...")
         model_ready = False
         pull_retries = 150
@@ -79,8 +75,6 @@ def load_agent_resources(provider, gemini_key=None):
                         break
             except Exception:
                 pass
-            
-            status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
             time.sleep(2)
 
         if not model_ready:
@@ -101,26 +95,27 @@ def load_agent_resources(provider, gemini_key=None):
     elif provider == "Google Gemini":
         target_model_name = "gemini-2.5-flash"
         if not gemini_key:
-            return None, None, None # Wait for user input
+            return None, None, None 
         
         status.info("Connecting to Google Gemini...")
         try:
-            # Using the format you requested
             lm = dspy.LM("gemini/gemini-2.5-flash", api_key=gemini_key)
         except Exception as e:
             status.error(f"Failed to initialize Gemini: {e}")
             return None, None, None
 
-    # --- COMMON AGENT CONFIGURATION ---
     status.info(f"Model ({target_model_name}) ready! Configuring Agent...")
     
     try:
-        # Configure DSPy globally with the selected LM
-        dspy.configure(lm=lm)
+        # REMOVED dspy.configure(lm=lm) to avoid thread errors
+        # We will apply the LM using a context manager during execution
         
         # Instantiate the class
         agent_instance = HybridAgent()
+        
         # Build the graph
+        # Note: If build_graph makes LLM calls during init, we might need to wrap this too.
+        # Assuming build_graph is structural only.
         agent_workflow = agent_instance.build_graph()
         
         status.success(f"Agent Connected & Ready! (Model: {target_model_name})")
@@ -133,14 +128,13 @@ def load_agent_resources(provider, gemini_key=None):
         status.error(f"Failed to configure agent: {e}")
         return None, None, None
 
-# Load resources based on selection
-# Note: if Gemini is selected but no key is provided, this returns None
+# Load resources
 agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option, api_key)
 
 # --- UI Layout ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
 
-# Debug Info Sidebar
+# Sidebar Debug
 with st.sidebar:
     st.divider()
     st.header("Debug Info")
@@ -156,6 +150,7 @@ with st.sidebar:
         if lm_instance:
             with st.spinner("Testing simple prompt..."):
                 try:
+                    # Direct call to LM doesn't strictly need context, but good practice
                     res = lm_instance("Say hello!", max_tokens=10)
                     st.success(f"Success! Model replied: {res}")
                 except Exception as e:
@@ -164,7 +159,6 @@ with st.sidebar:
             st.warning("Model not loaded yet.")
 
     if st.checkbox("Show Schema"):
-        # Make sure this import exists in your project structure
         try:
             from agent.tools.sqlite_tool import SQLiteTool
             st.code(SQLiteTool().get_schema_info())
@@ -188,7 +182,6 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Check if agent is loaded
     if not agent_workflow:
         if model_option == "Google Gemini" and not api_key:
             st.error("Please enter a Gemini API Key in the sidebar.")
@@ -197,13 +190,11 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
     else:
         with st.chat_message("assistant"):
             
-            # Create a Status Container to stream steps
             status_container = st.status("🚀 **Agent Working...**", expanded=True)
             
             def stream_callback(msg):
                 status_container.write(msg)
             
-            # Attach callback to the live instance
             agent_instance.status_callback = stream_callback
             
             try:
@@ -214,10 +205,11 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                     "sql_error": None
                 }
                 
-                # Run the Agent
-                output = agent_workflow.invoke(initial_state)
+                # --- CRITICAL FIX: USE CONTEXT MANAGER ---
+                # This applies the LM only for this block of code, avoiding global thread locking issues
+                with dspy.context(lm=lm_instance):
+                    output = agent_workflow.invoke(initial_state)
                 
-                # Update Status to complete
                 status_container.update(label="✅ **Analysis Complete!**", state="complete", expanded=False)
                 
                 final_ans = output.get("final_answer", "No answer.")
@@ -233,7 +225,6 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                     "classification": output.get("classification")
                 }
                 
-                # Save context
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": full_response,
@@ -244,5 +235,4 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
                 status_container.update(label="❌ **Error**", state="error")
                 st.error(f"An error occurred: {str(e)}")
             finally:
-                # Cleanup callback
                 agent_instance.status_callback = None
