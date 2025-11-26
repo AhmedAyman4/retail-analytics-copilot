@@ -22,18 +22,27 @@ model_option = st.sidebar.radio(
     index=0
 )
 
-api_key = None
+gemini_key = None
 if model_option == "Google Gemini":
-    # Check for API Key in environment variables first (Secrets)
-    api_key = os.getenv("GOOGLE_API_KEY")
+    # 1. Try System Environment Variable (Hugging Face Secrets / Docker)
+    gemini_key = os.getenv("GOOGLE_API_KEY")
+    
+    # 2. Try Streamlit Secrets (Streamlit Cloud / .streamlit/secrets.toml)
+    if not api_key:
+        try:
+            if "GOOGLE_API_KEY" in st.secrets:
+                gemini_key = st.secrets["GOOGLE_API_KEY"]
+        except FileNotFoundError:
+            pass # No secrets file found
+        except Exception:
+            pass # General error accessing secrets
     
     if api_key:
         st.sidebar.success("✅ API Key detected from Secrets")
     else:
-        # Only ask if not found in environment
-        api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
-        if not api_key:
-            st.sidebar.warning("⚠️ API Key required for Gemini")
+        # Only ask if not found in environment or secrets
+        st.sidebar.warning("Secret 'GOOGLE_API_KEY' not found.")
+        api_key = st.sidebar.text_input("Enter Gemini API Key manually", type="password")
 
 # --- Initialize Agent & Model (Cached) ---
 @st.cache_resource(show_spinner=False) 
@@ -190,7 +199,7 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
 
     if not agent_workflow:
         if model_option == "Google Gemini" and not api_key:
-            st.error("Please enter a Gemini API Key in the sidebar.")
+            st.error("Please enter a Gemini API Key in the sidebar or check your Secrets configuration.")
         else:
             st.error("Agent failed to load. Check settings.")
     else:
