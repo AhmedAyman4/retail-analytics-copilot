@@ -24,10 +24,16 @@ model_option = st.sidebar.radio(
 
 api_key = None
 if model_option == "Google Gemini":
-    default_key = os.getenv("GOOGLE_API_KEY", "")
-    api_key = st.sidebar.text_input("Enter Gemini API Key", value=default_key, type="password")
-    if not api_key:
-        st.sidebar.warning("⚠️ API Key required for Gemini")
+    # Check for API Key in environment variables first (Secrets)
+    api_key = os.getenv("GOOGLE_API_KEY")
+    
+    if api_key:
+        st.sidebar.success("✅ API Key detected from Secrets")
+    else:
+        # Only ask if not found in environment
+        api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+        if not api_key:
+            st.sidebar.warning("⚠️ API Key required for Gemini")
 
 # --- Initialize Agent & Model (Cached) ---
 @st.cache_resource(show_spinner=False) 
