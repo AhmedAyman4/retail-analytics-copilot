@@ -1,27 +1,28 @@
 import dspy
 
-# 1. Router Signature
+# 1. Router Signature (Updated for CoT)
 class RouterSignature(dspy.Signature):
     """
     Classify the user question into one of three categories:
-    - 'sql': Requires database access.
-    - 'rag': Requires looking up text policies.
-    - 'hybrid': Requires both.
+    - 'sql': Pure database queries (e.g. "count orders", "total revenue"). Use ONLY if dates/ids are explicit (e.g. "1997-01-01").
+    - 'rag': Pure text lookups (e.g. "what is the return policy", "meaning of AOV").
+    - 'hybrid': Queries requiring both Data and Docs.
     """
     question = dspy.InputField()
     classification = dspy.OutputField(desc="One of: 'sql', 'rag', 'hybrid'")
 
-# 2. [RESTORED] Planner Signature
+# 2. Planner Signature (Restored)
 class PlannerSignature(dspy.Signature):
     """
     Analyze the question and retrieved context to extract constraints for SQL generation.
+    Identify date ranges, product categories, or specific KPI formulas needed.
     """
     context = dspy.InputField(desc="Retrieved chunks from docs")
     question = dspy.InputField()
     analysis = dspy.OutputField(desc="Reasoning about dates, IDs, and formulas")
     sql_requirements = dspy.OutputField(desc="Specific filtering logic needed for SQL")
 
-# 3. SQL Signature (Strict Mode)
+# 3. SQL Signature
 class TextToSQLSignature(dspy.Signature):
     """
     Generate executable SQLite query for the Northwind database.
@@ -69,11 +70,11 @@ class SynthesizerSignature(dspy.Signature):
 class RouterModule(dspy.Module):
     def __init__(self):
         super().__init__()
-        self.prog = dspy.Predict(RouterSignature)
+        # UPDATED: Use ChainOfThought!
+        self.prog = dspy.ChainOfThought(RouterSignature)
     def forward(self, question):
         return self.prog(question=question)
 
-# [RESTORED] Planner Module
 class PlannerModule(dspy.Module):
     def __init__(self):
         super().__init__()
@@ -84,7 +85,6 @@ class PlannerModule(dspy.Module):
 class SQLModule(dspy.Module):
     def __init__(self):
         super().__init__()
-        # Using ChainOfThought helps the model "plan" the join before writing the SQL
         self.prog = dspy.ChainOfThought(TextToSQLSignature)
     def forward(self, schema, requirements, question, previous_error=""):
         return self.prog(schema=schema, requirements=requirements, question=question, previous_error=previous_error)
