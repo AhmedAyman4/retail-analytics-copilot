@@ -39,7 +39,8 @@ def load_agent_resources():
         return None, None, None
 
     # 2. Wait for Model Download (since we backgrounded the pull)
-    target_model = "llama3.2:3b"
+    # Using the specific tag requested
+    target_model = "phi3.5:3.8b"
     status.info(f"Ollama is online. Checking for model '{target_model}'...")
     model_ready = False
     pull_retries = 150 # Wait up to 5 minutes for download
@@ -102,7 +103,7 @@ st.title("🛍️ Northwind Retail Analytics Copilot")
 with st.sidebar:
     st.header("Debug Info")
     st.info("Backend: Ollama (Port 11434)")
-    st.info("Model: llama3.2:3b")
+    st.info("Model: phi3.5:3.8b")
     
     if st.button("Test LLM Connection"):
         with st.spinner("Testing simple prompt..."):
