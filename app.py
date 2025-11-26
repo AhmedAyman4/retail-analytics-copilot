@@ -13,68 +13,109 @@ from agent.graph_hybrid import HybridAgent
 # Page Config
 st.set_page_config(page_title="Retail Analytics Copilot", layout="wide")
 
+# --- Sidebar Configuration (Moved up to pass variables) ---
+st.sidebar.title("⚙️ Configuration")
+
+model_option = st.sidebar.radio(
+    "Select Model Provider",
+    ["Ollama (Local)", "Google Gemini"],
+    index=0
+)
+
+api_key = None
+if model_option == "Google Gemini":
+    # Try to get from environment variable first, otherwise ask user
+    default_key = os.getenv("GOOGLE_API_KEY", "")
+    api_key = st.sidebar.text_input("Enter Gemini API Key", value=default_key, type="password")
+    if not api_key:
+        st.sidebar.warning("⚠️ API Key required for Gemini")
+
 # --- Initialize Agent & Model (Cached) ---
-@st.cache_resource
-def load_agent_resources():
+# We add arguments to the function so Streamlit caches separate instances for Ollama vs Gemini
+@st.cache_resource(show_spinner=False) 
+def load_agent_resources(provider, gemini_key=None):
     status = st.empty()
-    status.info("Waiting for Ollama server to come online at localhost:11434...")
-    
-    server_url = "http://localhost:11434"
-    max_retries = 30
-    server_ready = False
-    
-    # 1. Wait for Ollama Server
-    for _ in range(max_retries):
-        try:
-            response = requests.get(server_url)
-            if response.status_code == 200:
-                server_ready = True
-                break
-        except requests.exceptions.ConnectionError:
-            pass
-        time.sleep(2)
-        
-    if not server_ready:
-        status.error("Failed to connect to Ollama. Check logs.")
-        return None, None, None
+    lm = None
+    target_model_name = ""
 
-    # 2. Wait for Model Download (since we backgrounded the pull)
-    # Using the specific tag requested
-    target_model = "phi3.5:3.8b"
-    status.info(f"Ollama is online. Checking for model '{target_model}'...")
-    model_ready = False
-    pull_retries = 150 # Wait up to 5 minutes for download
-    
-    for i in range(pull_retries):
-        try:
-            # Check installed tags
-            tags_response = requests.get(f"{server_url}/api/tags")
-            if tags_response.status_code == 200:
-                tags_data = tags_response.json()
-                models = [m.get('name') for m in tags_data.get('models', [])]
-                # Check for exact or partial match
-                if any(target_model in m for m in models):
-                    model_ready = True
+    # --- OLLAMA SETUP ---
+    if provider == "Ollama (Local)":
+        target_model = "phi3.5:3.8b"
+        target_model_name = target_model
+        status.info(f"Waiting for Ollama server to come online at localhost:11434...")
+        
+        server_url = "http://localhost:11434"
+        max_retries = 30
+        server_ready = False
+        
+        # 1. Wait for Ollama Server
+        for _ in range(max_retries):
+            try:
+                response = requests.get(server_url)
+                if response.status_code == 200:
+                    server_ready = True
                     break
-        except Exception:
-            pass
+            except requests.exceptions.ConnectionError:
+                pass
+            time.sleep(1)
+            
+        if not server_ready:
+            status.error("Failed to connect to Ollama. Check logs.")
+            return None, None, None
+
+        # 2. Wait for Model Download
+        status.info(f"Ollama is online. Checking for model '{target_model}'...")
+        model_ready = False
+        pull_retries = 150
         
-        status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
-        time.sleep(2)
+        for i in range(pull_retries):
+            try:
+                tags_response = requests.get(f"{server_url}/api/tags")
+                if tags_response.status_code == 200:
+                    tags_data = tags_response.json()
+                    models = [m.get('name') for m in tags_data.get('models', [])]
+                    if any(target_model in m for m in models):
+                        model_ready = True
+                        break
+            except Exception:
+                pass
+            
+            status.info(f"Downloading model '{target_model}'... (Time elapsed: {i*2}s)")
+            time.sleep(2)
 
-    if not model_ready:
-        status.error("Model download timed out or failed. Please restart the Space.")
-        return None, None, None
+        if not model_ready:
+            status.error("Model download timed out or failed.")
+            return None, None, None
 
-    status.info("Model ready! Configuring Agent...")
+        try:
+            lm = dspy.LM(
+                model=f"ollama/{target_model}",
+                api_base="http://localhost:11434", 
+                api_key="",
+            )
+        except Exception as e:
+            status.error(f"Failed to initialize Ollama LM: {e}")
+            return None, None, None
+
+    # --- GEMINI SETUP ---
+    elif provider == "Google Gemini":
+        target_model_name = "gemini-2.5-flash"
+        if not gemini_key:
+            return None, None, None # Wait for user input
+        
+        status.info("Connecting to Google Gemini...")
+        try:
+            # Using the format you requested
+            lm = dspy.LM("gemini/gemini-2.5-flash", api_key=gemini_key)
+        except Exception as e:
+            status.error(f"Failed to initialize Gemini: {e}")
+            return None, None, None
+
+    # --- COMMON AGENT CONFIGURATION ---
+    status.info(f"Model ({target_model_name}) ready! Configuring Agent...")
     
     try:
-        lm = dspy.LM(
-            model=f"ollama/{target_model}",
-            api_base="http://localhost:11434", 
-            api_key="",
-        )
-        
+        # Configure DSPy globally with the selected LM
         dspy.configure(lm=lm)
         
         # Instantiate the class
@@ -82,41 +123,53 @@ def load_agent_resources():
         # Build the graph
         agent_workflow = agent_instance.build_graph()
         
-        status.success(f"Agent Connected & Ready! (Model: {target_model})")
+        status.success(f"Agent Connected & Ready! (Model: {target_model_name})")
         time.sleep(1)
         status.empty() 
         
-        # Return Workflow (runnable), Instance (for callbacks), and LM (for testing)
         return agent_workflow, agent_instance, lm
         
     except Exception as e:
         status.error(f"Failed to configure agent: {e}")
         return None, None, None
 
-# Load the agent
-agent_workflow, agent_instance, lm_instance = load_agent_resources()
+# Load resources based on selection
+# Note: if Gemini is selected but no key is provided, this returns None
+agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option, api_key)
 
 # --- UI Layout ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
 
-# Sidebar
+# Debug Info Sidebar
 with st.sidebar:
+    st.divider()
     st.header("Debug Info")
-    st.info("Backend: Ollama (Port 11434)")
-    st.info("Model: phi3.5:3.8b")
+    
+    if model_option == "Ollama (Local)":
+        st.info("Backend: Ollama (Port 11434)")
+        st.info("Model: phi3.5:3.8b")
+    else:
+        st.info("Backend: Google Vertex/AI Studio")
+        st.info("Model: gemini-2.5-flash")
     
     if st.button("Test LLM Connection"):
-        with st.spinner("Testing simple prompt..."):
-            try:
-                # Simple generation test
-                res = lm_instance("Say hello!", max_tokens=10)
-                st.success(f"Success! Model replied: {res}")
-            except Exception as e:
-                st.error(f"Connection Failed: {e}")
+        if lm_instance:
+            with st.spinner("Testing simple prompt..."):
+                try:
+                    res = lm_instance("Say hello!", max_tokens=10)
+                    st.success(f"Success! Model replied: {res}")
+                except Exception as e:
+                    st.error(f"Connection Failed: {e}")
+        else:
+            st.warning("Model not loaded yet.")
 
     if st.checkbox("Show Schema"):
-        from agent.tools.sqlite_tool import SQLiteTool
-        st.code(SQLiteTool().get_schema_info())
+        # Make sure this import exists in your project structure
+        try:
+            from agent.tools.sqlite_tool import SQLiteTool
+            st.code(SQLiteTool().get_schema_info())
+        except ImportError:
+            st.warning("SQLiteTool not found in path")
 
 # Chat History
 if "messages" not in st.session_state:
@@ -135,13 +188,18 @@ if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if agent_workflow and agent_instance:
+    # Check if agent is loaded
+    if not agent_workflow:
+        if model_option == "Google Gemini" and not api_key:
+            st.error("Please enter a Gemini API Key in the sidebar.")
+        else:
+            st.error("Agent failed to load. Check settings.")
+    else:
         with st.chat_message("assistant"):
             
             # Create a Status Container to stream steps
             status_container = st.status("🚀 **Agent Working...**", expanded=True)
             
-            # Define the callback function that writes to the status container
             def stream_callback(msg):
                 status_container.write(msg)
             
