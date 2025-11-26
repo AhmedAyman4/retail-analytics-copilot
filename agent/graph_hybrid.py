@@ -1,5 +1,5 @@
 import dspy
-from typing import TypedDict, List, Any, Dict, Literal
+from typing import TypedDict, List, Any, Dict, Literal, Callable, Optional
 from langgraph.graph import StateGraph, END
 import logging
 
@@ -41,29 +41,42 @@ class HybridAgent:
         self.planner = PlannerModule()
         self.sql_gen = SQLModule()
         self.synth = SynthesizerModule()
+        
+        # Callback placeholder (will be set from Streamlit)
+        self.status_callback: Optional[Callable[[str], None]] = None
+
+    def log(self, message: str):
+        """Helper to log to both console and UI callback"""
+        logger.info(message)
+        if self.status_callback:
+            try:
+                self.status_callback(message)
+            except Exception:
+                pass # safely ignore UI update failures
 
     def router_node(self, state: AgentState):
-        logger.info(f"--- [Node: Router] Classifying: {state['question']} ---")
+        self.log(f"🚦 **Router:** Classifying intent for: '{state['question']}'...")
         result = self.router(question=state["question"])
         cls = result.classification.lower().strip()
         if cls not in ['sql', 'rag', 'hybrid']:
             cls = 'hybrid'
-        logger.info(f"--- Classification: {cls} ---")
+        self.log(f"✅ **Router:** Determined intent is **{cls.upper()}**")
         return {"classification": cls}
 
     def retriever_node(self, state: AgentState):
-        logger.info("--- [Node: Retriever] Searching Docs ---")
+        self.log("📚 **Retriever:** Searching documentation...")
         chunks = self.retriever.search(state["question"], k=3)
+        self.log(f"✅ **Retriever:** Found {len(chunks)} relevant documents.")
         return {"rag_chunks": chunks}
 
     def planner_node(self, state: AgentState):
-        logger.info("--- [Node: Planner] Analyzing Constraints ---")
+        self.log("🧠 **Planner:** Analyzing constraints and defining SQL logic...")
         context_text = "\n".join([c['text'] for c in state.get("rag_chunks", [])])
         result = self.planner(context=context_text, question=state["question"])
         return {"plan_requirements": result.sql_requirements}
 
     def sql_gen_node(self, state: AgentState):
-        logger.info("--- [Node: SQL Gen] Generating Query ---")
+        self.log("💾 **SQL Generator:** Writing SQLite query...")
         schema = self.sqlite.get_schema_info()
         reqs = state.get("plan_requirements", "")
         err = state.get("sql_error", "")
@@ -76,21 +89,25 @@ class HybridAgent:
         )
         
         clean_sql = pred.sql_query.replace("```sql", "").replace("```", "").strip()
-        logger.info(f"Generated SQL: {clean_sql}")
+        self.log(f"📝 **Generated SQL:**\n```sql\n{clean_sql}\n```")
         return {"sql_query": clean_sql}
 
     def sql_exec_node(self, state: AgentState):
-        logger.info("--- [Node: SQL Exec] Running Query ---")
+        self.log("⚡ **Executor:** Running SQL query...")
         results, error = self.sqlite.execute_query(state["sql_query"])
         if error:
-            logger.error(f"SQL Failed: {error}")
+            self.log(f"❌ **SQL Error:** {error}")
             return {"sql_error": error, "sql_result": [], "retries": state.get("retries", 0) + 1}
         else:
-            logger.info(f"SQL Success: {len(results)} rows found")
+            row_count = len(results)
+            self.log(f"✅ **Executor:** Query successful. Returned {row_count} rows.")
+            # Preview first row if exists
+            if row_count > 0:
+                self.log(f"🔍 *Result Preview:* `{str(results[0])[:100]}...`")
             return {"sql_result": results, "sql_error": None}
 
     def synthesizer_node(self, state: AgentState):
-        logger.info("--- [Node: Synthesizer] Formatting Answer ---")
+        self.log("✍️ **Synthesizer:** Formulating final answer...")
         context_text = "\n".join([c['text'] for c in state.get("rag_chunks", [])])
         sql_q = state.get("sql_query", "")
         sql_res = str(state.get("sql_result", []))
@@ -154,7 +171,7 @@ class HybridAgent:
 
         def check_sql_status(state):
             if state.get("sql_error") and state.get("retries", 0) < 2:
-                logger.warning("Triggering Repair Loop...")
+                self.log("⚠️ **Repair:** SQL failed. Attempting to fix query...")
                 return "retry"
             return "done"
 
