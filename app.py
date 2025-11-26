@@ -233,39 +233,61 @@ elif app_mode == "Batch Evaluation":
                         # Run Agent (Silent Mode - no callbacks to speed up)
                         agent_instance.status_callback = None 
                         
-                        with dspy.context(lm=lm_instance):
-                            output = agent_workflow.invoke(initial_state)
+                        output = None
                         
-                        # Parse Final Answer (Handle types)
-                        final_ans = output.get("final_answer")
-                        # Try to parse stringified lists/dicts if format hint suggests complex types
-                        if isinstance(final_answer, str) and item.get('format_hint') != 'str':
-                             try:
-                                 # Clean up markdown code blocks if present
-                                 clean_ans = final_ans.replace("```json", "").replace("```", "").strip()
-                                 # Heuristic: try ast.literal_eval if it looks like a structure
-                                 if "{" in clean_ans or "[" in clean_ans:
-                                     final_ans = ast.literal_eval(clean_ans)
-                             except:
-                                 pass
+                        # --- RETRY LOGIC FOR RATE LIMITS ---
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                with dspy.context(lm=lm_instance):
+                                    output = agent_workflow.invoke(initial_state)
+                                break # Success, exit retry loop
+                            except Exception as e:
+                                err_str = str(e).lower()
+                                # Check for Rate Limit (429) errors from Gemini
+                                if "429" in err_str or "quota" in err_str:
+                                    if attempt < max_retries - 1:
+                                        wait_time = 60 # Gemini usually needs ~60s
+                                        status_text.warning(f"Rate limit hit on {item.get('id')}. Sleeping {wait_time}s... (Attempt {attempt+1})")
+                                        time.sleep(wait_time)
+                                        status_text.text(f"Retrying {item.get('id')}...")
+                                    else:
+                                        raise e # Give up after retries
+                                else:
+                                    raise e # Not a rate limit error, raise immediately
 
-                        # Calculate Confidence Heuristic
-                        confidence = 0.7
-                        if output.get("sql_error"):
-                            confidence = 0.1
-                        elif output.get("classification") == "sql" and output.get("sql_result"):
-                            confidence = 0.9
+                        if output:
+                            # Parse Final Answer (Handle types)
+                            final_ans = output.get("final_answer")
+                            
+                            # --- FIX: Check the correct variable 'final_ans' ---
+                            if isinstance(final_ans, str) and item.get('format_hint') != 'str':
+                                 try:
+                                     # Clean up markdown code blocks if present
+                                     clean_ans = final_ans.replace("```json", "").replace("```", "").strip()
+                                     # Heuristic: try ast.literal_eval if it looks like a structure
+                                     if "{" in clean_ans or "[" in clean_ans:
+                                         final_ans = ast.literal_eval(clean_ans)
+                                 except:
+                                     pass
 
-                        # Build Record
-                        record = {
-                            "id": item['id'],
-                            "final_answer": final_ans,
-                            "sql": output.get("sql_query", ""),
-                            "confidence": confidence,
-                            "explanation": output.get("explanation", ""),
-                            "citations": output.get("citations", [])
-                        }
-                        results.append(record)
+                            # Calculate Confidence Heuristic
+                            confidence = 0.7
+                            if output.get("sql_error"):
+                                confidence = 0.1
+                            elif output.get("classification") == "sql" and output.get("sql_result"):
+                                confidence = 0.9
+
+                            # Build Record
+                            record = {
+                                "id": item['id'],
+                                "final_answer": final_ans,
+                                "sql": output.get("sql_query", ""),
+                                "confidence": confidence,
+                                "explanation": output.get("explanation", ""),
+                                "citations": output.get("citations", [])
+                            }
+                            results.append(record)
                         
                     except Exception as e:
                         st.error(f"Error on ID {item.get('id')}: {e}")
@@ -279,6 +301,10 @@ elif app_mode == "Batch Evaluation":
                     
                     # Update Progress
                     progress_bar.progress((idx + 1) / len(questions))
+                    
+                    # Small delay between requests to be polite to API
+                    if model_option == "Google Gemini":
+                        time.sleep(2)
 
                 status_text.text("Processing Complete!")
                 st.success("✅ Evaluation Finished.")
