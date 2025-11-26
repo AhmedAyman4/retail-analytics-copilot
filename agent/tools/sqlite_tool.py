@@ -9,38 +9,24 @@ class SQLiteTool:
 
     def _create_friendly_views(self):
         """
-        Creates lowercase, space-free views to make SQL generation easier 
-        for small models (e.g., 'Order Details' -> 'order_details').
+        Creates views ONLY for tables with spaces/special characters.
+        We do NOT create views for 'Orders' -> 'orders' because SQLite 
+        treats them as name collisions.
         """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 1. order_details
+            # 1. order_details (Needed to handle space in "Order Details")
             cursor.execute("""
                 CREATE VIEW IF NOT EXISTS order_details AS 
                 SELECT OrderID, ProductID, UnitPrice, Quantity, Discount 
                 FROM "Order Details"
             """)
             
-            # 2. orders (lowercase)
-            cursor.execute("""
-                CREATE VIEW IF NOT EXISTS orders AS 
-                SELECT * FROM Orders
-            """)
+            # Note: We skip creating views for Orders, Products, etc. 
+            # because 'SELECT * FROM orders' works natively on the 'Orders' table.
             
-            # 3. products (lowercase)
-            cursor.execute("""
-                CREATE VIEW IF NOT EXISTS products AS 
-                SELECT * FROM Products
-            """)
-            
-            # 4. categories (lowercase)
-            cursor.execute("""
-                CREATE VIEW IF NOT EXISTS categories AS 
-                SELECT * FROM Categories
-            """)
-
             conn.commit()
             conn.close()
         except Exception as e:
@@ -52,22 +38,34 @@ class SQLiteTool:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Only show our friendly views to the model to keep it focused
-            views = ['orders', 'order_details', 'products', 'categories', 'customers', 'suppliers']
+            # We map the "Friendly Name" we want the LLM to use 
+            # to the "Real Table Name" in the database.
+            table_map = {
+                'orders': 'Orders',
+                'products': 'Products',
+                'categories': 'Categories',
+                'customers': 'Customers',
+                'suppliers': 'Suppliers',
+                'order_details': 'order_details', # This is our view
+                'employees': 'Employees'
+            }
             
             schema_str = "Database Schema (SQLite):\n"
             
-            for table_name in views:
-                # Check if table/view exists
-                cursor.execute(f"SELECT name FROM sqlite_master WHERE (type='table' OR type='view') AND name='{table_name}';")
+            for friendly_name, real_name in table_map.items():
+                # Check if the real table/view exists
+                cursor.execute(f"SELECT name FROM sqlite_master WHERE (type='table' OR type='view') AND name='{real_name}';")
                 if not cursor.fetchone():
                     continue
                     
-                schema_str += f"Table: {table_name}\n"
-                cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
+                # We show the LLM the FRIENDLY name (lowercase) so it writes simple SQL
+                schema_str += f"Table: {friendly_name}\n"
+                
+                # Get columns using the REAL name
+                cursor.execute(f"PRAGMA table_info(\"{real_name}\");")
                 columns = cursor.fetchall()
                 for col in columns:
-                    # cid, name, type, notnull, dflt_value, pk
+                    # col[1] is name, col[2] is type
                     schema_str += f"  - {col[1]} ({col[2]})\n"
                 schema_str += "\n"
             
