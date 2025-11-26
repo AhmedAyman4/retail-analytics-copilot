@@ -4,9 +4,9 @@ import dspy
 class RouterSignature(dspy.Signature):
     """
     Classify the user question into one of three categories:
-    - 'sql': Requires database access (sales numbers, orders, customer data, revenue, counts).
-    - 'rag': Requires looking up static text policies, calendars, definitions, or return windows.
-    - 'hybrid': Requires both (e.g., "sales during Summer 1997" - needs calendar dates + DB).
+    - 'sql': Requires database access (sales numbers, orders, customer data).
+    - 'rag': Requires looking up text policies, calendars, or definitions.
+    - 'hybrid': Requires both (e.g., "sales during Summer 1997").
     """
     question = dspy.InputField()
     classification = dspy.OutputField(desc="One of: 'sql', 'rag', 'hybrid'")
@@ -39,16 +39,15 @@ class TextToSQLSignature(dspy.Signature):
     previous_error = dspy.InputField(desc="Error from previous attempt, if any", optional=True)
     sql_query = dspy.OutputField(desc="The SQL query string only")
 
-# 4. Synthesizer (UPDATED)
+# 4. Synthesizer (Robust)
 class SynthesizerSignature(dspy.Signature):
     """
     Answer the user question based on the provided Context or SQL Results.
     
     CRITICAL RULES:
-    1. If the answer is explicitly found in the 'context' (e.g., policies, return days, definitions), USE IT. 
-    2. Do NOT say "requires SQL" if the answer is in the text context.
-    3. Only rely on 'sql_result' if the question asks for calculated numbers (revenue, counts, averages).
-    4. Ensure output matches 'format_hint' exactly (e.g., if int, return just the number).
+    1. If the answer is in 'context', USE IT. Do not ask for SQL.
+    2. Output strict JSON format with keys: "explanation", "final_answer".
+    3. CHECK SPELLING: Key must be "explanation", NOT "explanicn".
     """
     question = dspy.InputField()
     context = dspy.InputField(desc="Retrieved text chunks (Trust this info!)")
@@ -56,8 +55,8 @@ class SynthesizerSignature(dspy.Signature):
     sql_result = dspy.InputField(desc="Result rows from DB", optional=True)
     format_hint = dspy.InputField(desc="Required output format (e.g., int, float, list)")
     
-    explanation = dspy.OutputField(desc="Reasoning: 'Found return window in context...'")
-    final_answer = dspy.OutputField(desc="The typed answer matching format_hint")
+    explanation = dspy.OutputField(desc="Brief reasoning (Key: 'explanation')")
+    final_answer = dspy.OutputField(desc="The final answer (Key: 'final_answer')")
 
 # Define Modules
 class RouterModule(dspy.Module):
@@ -84,8 +83,8 @@ class SQLModule(dspy.Module):
 class SynthesizerModule(dspy.Module):
     def __init__(self):
         super().__init__()
-        # UPDATED: Changed from Predict to ChainOfThought
-        # This forces the model to reason ("I see '14 days' in the text") before answering.
-        self.prog = dspy.ChainOfThought(SynthesizerSignature)
+        # Using Predict instead of ChainOfThought to reduce JSON nesting issues
+        # The prompt explicitly asks for reasoning in the 'explanation' field.
+        self.prog = dspy.Predict(SynthesizerSignature)
     def forward(self, question, context, sql_query, sql_result, format_hint):
         return self.prog(question=question, context=context, sql_query=sql_query, sql_result=sql_result, format_hint=format_hint)
