@@ -3,6 +3,10 @@ import dspy
 import argparse
 import ast
 import os
+import sys
+# Ensure root is in path
+sys.path.append(os.getcwd())
+
 from tqdm import tqdm
 from agent.graph_hybrid import HybridAgent
 
@@ -13,9 +17,10 @@ def main():
     args = parser.parse_args()
 
     # 1. Setup DSPy with local Hugging Face Model
-    # This runs locally using 'transformers'. It will download weights on first run.
     print("Loading local Hugging Face model (microsoft/Phi-3.5-mini-instruct)...")
-    lm = dspy.HFModel(model='microsoft/Phi-3.5-mini-instruct')
+    
+    # UPDATED: Use dspy.HF instead of dspy.HFModel
+    lm = dspy.HF(model='microsoft/Phi-3.5-mini-instruct')
     dspy.settings.configure(lm=lm)
 
     # 2. Initialize Agent
