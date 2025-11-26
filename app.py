@@ -25,22 +25,32 @@ model_option = st.sidebar.radio(
 gemini_key = None
 if model_option == "Google Gemini":
     # 1. Try System Environment Variable (Hugging Face Secrets / Docker)
-    gemini_key = os.getenv("GOOGLE_API_KEY")
+    env_key = os.getenv("GOOGLE_API_KEY")
     
     # 2. Try Streamlit Secrets (Streamlit Cloud / .streamlit/secrets.toml)
-    if not gemini_key:
-        try:
-            if "GOOGLE_API_KEY" in st.secrets:
-                gemini_key = st.secrets["GOOGLE_API_KEY"]
-        except FileNotFoundError:
-            pass # No secrets file found
-        except Exception:
-            pass # General error accessing secrets
+    secrets_key = None
+    try:
+        if "GOOGLE_API_KEY" in st.secrets:
+            secrets_key = st.secrets["GOOGLE_API_KEY"]
+    except FileNotFoundError:
+        pass 
+    except Exception:
+        pass 
+
+    # prioritize Env var, then Secrets
+    gemini_key = env_key or secrets_key
     
+    # Debug Expander to help you see what is happening
+    with st.sidebar.expander("🔐 Secrets Debugger"):
+        st.write(f"**Env Var found:** {'Yes' if env_key else 'No'}")
+        st.write(f"**St.Secrets found:** {'Yes' if secrets_key else 'No'}")
+        if not gemini_key:
+            st.error("No key found in either location.")
+            st.info("If on HuggingFace: Settings -> Variables and Secrets -> New Secret. Name: GOOGLE_API_KEY. Value: Your Key. **Then Restart Space**.")
+
     if gemini_key:
-        st.sidebar.success("✅ API Key detected from Secrets")
+        st.sidebar.success("✅ API Key active")
     else:
-        # Only ask if not found in environment or secrets
         st.sidebar.warning("Secret 'GOOGLE_API_KEY' not found.")
         gemini_key = st.sidebar.text_input("Enter Gemini API Key manually", type="password")
 
