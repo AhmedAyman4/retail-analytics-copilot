@@ -23,6 +23,7 @@ def load_agent_resources():
     max_retries = 30
     server_ready = False
     
+    # 1. Wait for Ollama Server
     for _ in range(max_retries):
         try:
             response = requests.get(server_url)
@@ -37,7 +38,33 @@ def load_agent_resources():
         status.error("Failed to connect to Ollama. Check logs.")
         return None, None, None
 
-    status.info("Ollama online! Configuring DSPy...")
+    # 2. Wait for Model Download (since we backgrounded the pull)
+    status.info("Ollama is online. Checking for model 'phi3.5:3.8b'...")
+    model_ready = False
+    pull_retries = 150 # Wait up to 5 minutes for download
+    
+    for i in range(pull_retries):
+        try:
+            # Check installed tags
+            tags_response = requests.get(f"{server_url}/api/tags")
+            if tags_response.status_code == 200:
+                tags_data = tags_response.json()
+                models = [m.get('name') for m in tags_data.get('models', [])]
+                # Check for exact or partial match
+                if any("phi3.5:3.8b" in m for m in models):
+                    model_ready = True
+                    break
+        except Exception:
+            pass
+        
+        status.info(f"Downloading model 'phi3.5:3.8b'... (Time elapsed: {i*2}s)")
+        time.sleep(2)
+
+    if not model_ready:
+        status.error("Model download timed out or failed. Please restart the Space.")
+        return None, None, None
+
+    status.info("Model ready! Configuring Agent...")
     
     try:
         lm = dspy.LM(
