@@ -2,6 +2,8 @@ import dspy
 from typing import TypedDict, List, Any, Dict, Literal, Callable, Optional
 from langgraph.graph import StateGraph, END
 import logging
+import json
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -10,26 +12,19 @@ from agent.dspy_signatures import RouterModule, PlannerModule, SQLModule, Synthe
 from agent.tools.sqlite_tool import SQLiteTool
 from agent.rag.retrieval import LocalRetriever
 
-# --- State Definition ---
 class AgentState(TypedDict):
     question: str
     format_hint: str
-    
     classification: str
     rag_chunks: List[Dict]
     plan_requirements: str
-    
     sql_query: str
     sql_result: List[Dict]
     sql_error: str
-    
     final_answer: Any
     explanation: str
     citations: List[str]
-    
     retries: int
-
-# --- Node Logic ---
 
 class HybridAgent:
     def __init__(self):
@@ -65,21 +60,21 @@ class HybridAgent:
         chunks = self.retriever.search(state["question"], k=3)
         self.log(f"✅ **Retriever:** Found {len(chunks)} relevant documents.")
         
-        # UPDATED: Log the content snippet so user can verify RAG worked
         if chunks:
-            snippet = chunks[0]['text'][:200].replace('\n', ' ')
+            # Clean up newlines for display
+            snippet = chunks[0]['text'][:150].replace('\n', ' ')
             self.log(f"📄 *Top Context:* \"{snippet}...\"")
             
         return {"rag_chunks": chunks}
 
     def planner_node(self, state: AgentState):
-        self.log("🧠 **Planner:** Analyzing constraints and defining SQL logic...")
+        self.log("🧠 **Planner:** Analyzing constraints...")
         context_text = "\n".join([c['text'] for c in state.get("rag_chunks", [])])
         result = self.planner(context=context_text, question=state["question"])
         return {"plan_requirements": result.sql_requirements}
 
     def sql_gen_node(self, state: AgentState):
-        self.log("💾 **SQL Generator:** Writing SQLite query...")
+        self.log("💾 **SQL Generator:** Writing query...")
         schema = self.sqlite.get_schema_info()
         reqs = state.get("plan_requirements", "")
         err = state.get("sql_error", "")
@@ -96,32 +91,57 @@ class HybridAgent:
         return {"sql_query": clean_sql}
 
     def sql_exec_node(self, state: AgentState):
-        self.log("⚡ **Executor:** Running SQL query...")
+        self.log("⚡ **Executor:** Running SQL...")
         results, error = self.sqlite.execute_query(state["sql_query"])
         if error:
             self.log(f"❌ **SQL Error:** {error}")
             return {"sql_error": error, "sql_result": [], "retries": state.get("retries", 0) + 1}
         else:
-            row_count = len(results)
-            self.log(f"✅ **Executor:** Query successful. Returned {row_count} rows.")
-            if row_count > 0:
-                self.log(f"🔍 *Result Preview:* `{str(results[0])[:100]}...`")
+            self.log(f"✅ **Executor:** Query successful ({len(results)} rows).")
             return {"sql_result": results, "sql_error": None}
 
     def synthesizer_node(self, state: AgentState):
-        self.log("✍️ **Synthesizer:** Formulating final answer (Reasoning first)...")
+        self.log("✍️ **Synthesizer:** Formulating answer...")
         context_text = "\n".join([c['text'] for c in state.get("rag_chunks", [])])
         sql_q = state.get("sql_query", "")
         sql_res = str(state.get("sql_result", []))
         
-        pred = self.synth(
-            question=state["question"],
-            context=context_text,
-            sql_query=sql_q,
-            sql_result=sql_res,
-            format_hint=state["format_hint"]
-        )
-        
+        try:
+            pred = self.synth(
+                question=state["question"],
+                context=context_text,
+                sql_query=sql_q,
+                sql_result=sql_res,
+                format_hint=state["format_hint"]
+            )
+            final_answer = pred.final_answer
+            explanation = pred.explanation
+
+        except Exception as e:
+            # CRITICAL RECOVERY LOGIC
+            # If DSPy fails to parse JSON (e.g. 'explanicn'), we parse the raw error message
+            # The error message usually contains: "LM Response: {...}"
+            err_str = str(e)
+            self.log(f"⚠️ **JSON Parse Warning:** {err_str[:100]}... Attempting repair.")
+            
+            final_answer = "Error generating answer."
+            explanation = "Failed to parse model output."
+            
+            # 1. Try to find JSON blob in error
+            json_match = re.search(r'LM Response: ({.*})', err_str, re.DOTALL)
+            if json_match:
+                raw_json = json_match.group(1)
+                try:
+                    # Fix common typo "explanicn" -> "explanation"
+                    raw_json = raw_json.replace("explanicn", "explanation")
+                    data = json.loads(raw_json)
+                    final_answer = data.get("final_answer", final_answer)
+                    explanation = data.get("explanation", data.get("reasoning", explanation))
+                    self.log("✅ **Repair Successful:** Extracted answer from malformed JSON.")
+                except:
+                    pass
+
+        # Build citations
         citations = []
         for c in state.get("rag_chunks", []):
             citations.append(c['id'])
@@ -131,15 +151,13 @@ class HybridAgent:
                     citations.append(table)
         
         return {
-            "final_answer": pred.final_answer, 
-            "explanation": pred.explanation, # This will now contain the Chain of Thought
+            "final_answer": final_answer, 
+            "explanation": explanation,
             "citations": list(set(citations))
         }
 
-    # --- Graph Construction ---
     def build_graph(self):
         workflow = StateGraph(AgentState)
-
         workflow.add_node("router", self.router_node)
         workflow.add_node("retriever", self.retriever_node)
         workflow.add_node("planner", self.planner_node)
@@ -149,43 +167,22 @@ class HybridAgent:
 
         workflow.set_entry_point("router")
 
-        workflow.add_conditional_edges(
-            "router",
-            lambda x: x["classification"],
-            {
-                "rag": "retriever",
-                "sql": "sql_gen",
-                "hybrid": "retriever"
-            }
-        )
+        workflow.add_conditional_edges("router", lambda x: x["classification"], 
+                                     {"rag": "retriever", "sql": "sql_gen", "hybrid": "retriever"})
         
-        workflow.add_conditional_edges(
-            "retriever",
-            lambda x: "planner" if x["classification"] == "hybrid" else "synthesizer",
-            {
-                "planner": "planner",
-                "synthesizer": "synthesizer"
-            }
-        )
+        workflow.add_conditional_edges("retriever", 
+                                     lambda x: "planner" if x["classification"] == "hybrid" else "synthesizer",
+                                     {"planner": "planner", "synthesizer": "synthesizer"})
 
         workflow.add_edge("planner", "sql_gen")
         workflow.add_edge("sql_gen", "sql_exec")
 
         def check_sql_status(state):
             if state.get("sql_error") and state.get("retries", 0) < 2:
-                self.log("⚠️ **Repair:** SQL failed. Attempting to fix query...")
+                self.log("⚠️ **Repair:** SQL failed. Fixing...")
                 return "retry"
             return "done"
 
-        workflow.add_conditional_edges(
-            "sql_exec",
-            check_sql_status,
-            {
-                "retry": "sql_gen",
-                "done": "synthesizer"
-            }
-        )
-
+        workflow.add_conditional_edges("sql_exec", check_sql_status, {"retry": "sql_gen", "done": "synthesizer"})
         workflow.add_edge("synthesizer", END)
-
         return workflow.compile()
