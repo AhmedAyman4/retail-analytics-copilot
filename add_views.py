@@ -1,12 +1,16 @@
 import sqlite3
+import os
 
 def create_views(db_path="data/northwind.sqlite"):
-    print(f"Connecting to {db_path}...")
+    if not os.path.exists(db_path):
+        print(f"Database not found at {db_path}. Waiting for download...")
+        return
+
+    print(f"Connecting to {db_path} to add views...")
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     # List of views in dependency order
-    # extracted from the provided create.sql
     views_sql = [
         """DROP VIEW IF EXISTS "Alphabetical list of products";""",
         """CREATE VIEW "Alphabetical list of products" AS
@@ -145,16 +149,14 @@ def create_views(db_path="data/northwind.sqlite"):
 
     for sql in views_sql:
         try:
-            # Fix DATETIME string format from Access to SQLite standard if needed
-            # (The strings in the list above were already adjusted to use DATE() or raw strings where safer)
             cursor.execute(sql)
-            print(f"Executed: {sql[:40]}...")
+            print(f"Executed view creation: {sql.splitlines()[0]}")
         except Exception as e:
-            print(f"Error executing {sql[:30]}... : {e}")
+            print(f"Error executing view: {e}")
 
     conn.commit()
     conn.close()
-    print("Done! Views added.")
+    print("✅ All views added successfully.")
 
 if __name__ == "__main__":
     create_views()
