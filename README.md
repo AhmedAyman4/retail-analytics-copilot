@@ -10,12 +10,11 @@ short_description: RAG (read docs)  SQL queries (run on SQLite)  Hybrid (both)
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
 
-
 # 🛍️ Retail Analytics Copilot (Hybrid RAG + SQL Agent)
 
 An autonomous AI agent built with **LangGraph** and **DSPy** that answers retail analytics questions. It intelligently switches between querying a local SQLite database (**Northwind**) and searching local documentation (**RAG**) to provide grounded, accurate answers.
 
-[![Open on Hugging Face](https://huggingface.co/datasets/huggingface/badges/raw/main/open-on-hf-md-dark.svg)](https://huggingface.co/spaces/ahmed-ayman/retail-analytics-copilot)
+[Open on Hugging Face](https://huggingface.co/spaces/ahmed-ayman/retail-analytics-copilot)
 
 ---
 
@@ -25,10 +24,11 @@ The agent uses a **stateful LangGraph workflow** with the following key nodes:
 
 - **Router (Chain-of-Thought)**:  
   Classifies user intent as:
+
   - `SQL` (database),
-  - `RAG` (policy/docs), or  
+  - `RAG` (policy/docs), or
   - `HYBRID` (requires both).  
-  Includes **heuristic overrides** for critical keywords like `"calendar"` or `"policy"`.
+    Includes **heuristic overrides** for critical keywords like `"calendar"` or `"policy"`.
 
 - **Retriever**:  
   Uses **BM25** to search local markdown files for context (e.g., calendars, KPI definitions).
@@ -37,8 +37,9 @@ The agent uses a **stateful LangGraph workflow** with the following key nodes:
   Analyzes retrieved context to extract specific constraints (e.g., mapping `"Summer 1997"` → date range `"1997-06-01"` to `"1997-08-31"`) **before** SQL generation.
 
 - **SQL Generator (Strict)**:  
-  A specialized **DSPy module** constrained by a *"Schema Cheat Sheet"* to prevent hallucinations.  
+  A specialized **DSPy module** constrained by a _"Schema Cheat Sheet"_ to prevent hallucinations.  
   Features:
+
   - Regex sanitization
   - Heuristic repairs (e.g., correcting `ShipDate` → `OrderDate`)
 
@@ -54,14 +55,14 @@ The agent uses a **stateful LangGraph workflow** with the following key nodes:
 
 I optimized the **Router Module** using **Chain-of-Thought (CoT)** prompting.
 
-| Metric              | Before (Simple Predict) | After (Chain of Thought) |
-|---------------------|--------------------------|---------------------------|
-| Intent Accuracy     | 60%                      | **95%**                   |
-| Hybrid Detection    | Failed often (labeled as SQL) | Successfully detects `"defined in..."` queries |
-| Latency             | ~2s                      | ~4s *(worth the trade-off for accuracy)* |
+| Metric           | Before (Simple Predict)       | After (Chain of Thought)                       |
+| ---------------- | ----------------------------- | ---------------------------------------------- |
+| Intent Accuracy  | 60%                           | **95%**                                        |
+| Hybrid Detection | Failed often (labeled as SQL) | Successfully detects `"defined in..."` queries |
+| Latency          | ~2s                           | ~4s _(worth the trade-off for accuracy)_       |
 
 **Key Improvement**:  
-The CoT Router correctly identifies that questions like *"Sales during Summer 1997"* require a **document lookup first** (to define "Summer") before generating SQL—preventing hallucinated date ranges.
+The CoT Router correctly identifies that questions like _"Sales during Summer 1997"_ require a **document lookup first** (to define "Summer") before generating SQL—preventing hallucinated date ranges.
 
 ---
 
@@ -92,3 +93,4 @@ python add_views.py
 python run_agent_hybrid.py \
   --batch sample_questions_hybrid_eval.jsonl \
   --out outputs_hybrid.jsonl
+```
