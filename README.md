@@ -15,6 +15,8 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 
 An autonomous AI agent built with **LangGraph** and **DSPy** that answers retail analytics questions. It intelligently switches between querying a local SQLite database (**Northwind**) and searching local documentation (**RAG**) to provide grounded, accurate answers.
 
+[![Open on Hugging Face](https://huggingface.co/datasets/huggingface/badges/raw/main/open-on-hf-md-dark.svg)](https://huggingface.co/spaces/ahmed-ayman/retail-analytics-copilot)
+
 ---
 
 ## 🧠 Graph Design
