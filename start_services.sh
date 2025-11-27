@@ -13,11 +13,15 @@ until curl -s http://localhost:11434 > /dev/null; do
 done
 
 # 3. Pull Model in BACKGROUND (&)
-# This allows Streamlit to start immediately so the Space doesn't crash.
 echo "Triggering background pull of phi3.5:3.8b..."
 ollama pull phi3.5:3.8b &
 
-# 4. Start Streamlit immediately
+# 4. Setup Database Views (Crucial Step for Schema)
+# Since there is no terminal, we run this Python script automatically on startup.
+echo "Injecting Views into SQLite Database..."
+python add_views.py
+
+# 5. Start Streamlit immediately
 # Added --server.enableCORS=false and --server.enableXsrfProtection=false to fix Upload 403 Errors
 echo "Starting Streamlit..."
 streamlit run app.py \
