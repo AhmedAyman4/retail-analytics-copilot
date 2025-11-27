@@ -10,8 +10,6 @@ class SQLiteTool:
     def _create_friendly_views(self):
         """
         Creates views ONLY for tables with spaces/special characters.
-        We do NOT create views for 'Orders' -> 'orders' because SQLite 
-        treats them as name collisions.
         """
         try:
             conn = sqlite3.connect(self.db_path)
@@ -24,50 +22,75 @@ class SQLiteTool:
                 FROM "Order Details"
             """)
             
-            # Note: We skip creating views for Orders, Products, etc. 
-            # because 'SELECT * FROM orders' works natively on the 'Orders' table.
-            
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"Warning: Could not create friendly views: {e}")
 
     def get_schema_info(self) -> str:
-        """Introspects the DB and returns a schema string."""
+        """
+        Introspects the DB. 
+        UPDATED: Now includes the newly added Views so the agent can use them
+        instead of writing complex joins.
+        """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # We map the "Friendly Name" we want the LLM to use 
-            # to the "Real Table Name" in the database.
-            table_map = {
-                'orders': 'Orders',
-                'products': 'Products',
-                'categories': 'Categories',
-                'customers': 'Customers',
-                'suppliers': 'Suppliers',
-                'order_details': 'order_details', # This is our view
-                'employees': 'Employees'
-            }
+            # 1. Standard Tables we want exposed
+            core_tables = [
+                'Orders', 'Products', 'Categories', 'Customers', 
+                'Suppliers', 'Employees', 'Shippers'
+            ]
             
+            # 2. Our "Friendly" View
+            friendly_views = ['order_details']
+            
+            # 3. The new "Legacy/Access" Views (The ones you just added)
+            # We query sqlite_master to find them dynamically
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='view' AND name NOT LIKE 'sqlite_%'")
+            all_views = [row[0] for row in cursor.fetchall()]
+            
+            # Filter to ensure we include the ones from create.sql
+            legacy_views = [
+                v for v in all_views 
+                if v not in friendly_views and v not in ['orders', 'products', 'customers'] # avoid simple duplicate views
+            ]
+
             schema_str = "Database Schema (SQLite):\n"
             
-            for friendly_name, real_name in table_map.items():
-                # Check if the real table/view exists
-                cursor.execute(f"SELECT name FROM sqlite_master WHERE (type='table' OR type='view') AND name='{real_name}';")
-                if not cursor.fetchone():
-                    continue
-                    
-                # We show the LLM the FRIENDLY name (lowercase) so it writes simple SQL
-                schema_str += f"Table: {friendly_name}\n"
-                
-                # Get columns using the REAL name
-                cursor.execute(f"PRAGMA table_info(\"{real_name}\");")
+            # -- A. Core Tables --
+            schema_str += "--- CORE TABLES ---\n"
+            for table in core_tables:
+                cursor.execute(f"PRAGMA table_info(\"{table}\");")
                 columns = cursor.fetchall()
-                for col in columns:
-                    # col[1] is name, col[2] is type
+                if columns:
+                    schema_str += f"Table: {table}\n"
+                    for col in columns:
+                        schema_str += f"  - {col[1]} ({col[2]})\n"
+                    schema_str += "\n"
+
+            # -- B. Helper Views --
+            schema_str += "--- HELPER VIEWS (Use these for simpler queries) ---\n"
+            
+            # Add order_details
+            cursor.execute(f"PRAGMA table_info(\"order_details\");")
+            cols = cursor.fetchall()
+            if cols:
+                schema_str += f"View: order_details (Simplifies 'Order Details')\n"
+                for col in cols:
                     schema_str += f"  - {col[1]} ({col[2]})\n"
                 schema_str += "\n"
+
+            # Add the Legacy Views (High Value for the Agent)
+            for view in legacy_views:
+                cursor.execute(f"PRAGMA table_info(\"{view}\");")
+                cols = cursor.fetchall()
+                if cols:
+                    schema_str += f"View: {view}\n"
+                    for col in cols:
+                        schema_str += f"  - {col[1]} ({col[2]})\n"
+                    schema_str += "\n"
             
             conn.close()
             return schema_str
