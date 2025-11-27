@@ -47,6 +47,19 @@ if model_option == "Google Gemini":
         st.sidebar.warning("Secret 'GOOGLE_API_KEY' not found.")
         gemini_key = st.sidebar.text_input("Enter Gemini API Key manually", type="password")
 
+# --- Database Schema Display ---
+st.sidebar.divider()
+with st.sidebar.expander("📊 View Database Schema"):
+    try:
+        from agent.tools.sqlite_tool import SQLiteTool
+        # Instantiate tool to get schema (defaults to data/northwind.sqlite)
+        schema_info = SQLiteTool().get_schema_info()
+        st.code(schema_info, language="sql")
+    except ImportError:
+        st.warning("SQLiteTool module not found.")
+    except Exception as e:
+        st.error(f"Failed to load schema: {e}")
+
 # --- Initialize Agent & Model (Cached) ---
 @st.cache_resource(show_spinner=False) 
 def load_agent_resources(provider, gemini_key=None):
@@ -121,72 +134,99 @@ agent_workflow, agent_instance, lm_instance = load_agent_resources(model_option,
 # --- Main Title ---
 st.title("🛍️ Northwind Retail Analytics Copilot")
 
-# ==========================================
-# MODE 1: INTERACTIVE CHAT
-# ==========================================
-if app_mode == "Interactive Chat":
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "details" in message:
-                with st.expander("Show Logic & Data"):
-                    st.json(message["details"])
-
-    if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        if not agent_workflow:
-            st.error("Agent failed to load.")
-        else:
-            with st.chat_message("assistant"):
-                status_container = st.status("🚀 **Agent Working...**", expanded=True)
-                def stream_callback(msg):
-                    status_container.write(msg)
-                
-                agent_instance.status_callback = stream_callback
-                
+# --- Sidebar Debug ---
+with st.sidebar:
+    st.divider()
+    st.header("Debug Info")
+    
+    if model_option == "Ollama (Local)":
+        st.info("Backend: Ollama (Port 11434)")
+        st.info("Model: phi3.5:3.8b")
+    else:
+        st.info("Backend: Google Vertex/AI Studio")
+        st.info("Model: gemini-2.5-flash")
+    
+    if st.button("Test LLM Connection"):
+        if lm_instance:
+            with st.spinner("Testing simple prompt..."):
                 try:
-                    initial_state = {
-                        "question": prompt,
-                        "format_hint": "str",
-                        "retries": 0,
-                        "sql_error": None
-                    }
-                    
-                    with dspy.context(lm=lm_instance):
-                        output = agent_workflow.invoke(initial_state)
-                    
-                    status_container.update(label="✅ **Analysis Complete!**", state="complete", expanded=False)
-                    
-                    final_ans = output.get("final_answer", "No answer.")
-                    explanation = output.get("explanation", "")
-                    
-                    full_response = f"**Answer:** {final_ans}\n\n_{explanation}_"
-                    st.markdown(full_response)
-                    
-                    details = {
-                        "sql": output.get("sql_query"),
-                        "citations": output.get("citations"),
-                        "sql_error": output.get("sql_error"),
-                        "classification": output.get("classification")
-                    }
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": full_response,
-                        "details": details
-                    })
-                    
+                    # Direct call to LM doesn't strictly need context, but good practice
+                    res = lm_instance("Say hello!", max_tokens=10)
+                    st.success(f"Success! Model replied: {res}")
                 except Exception as e:
-                    status_container.update(label="❌ **Error**", state="error")
-                    st.error(f"An error occurred: {str(e)}")
-                finally:
-                    agent_instance.status_callback = None
+                    st.error(f"Connection Failed: {e}")
+        else:
+            st.warning("Model not loaded yet.")
+
+# Chat History
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "details" in message:
+            with st.expander("Show Logic & Data"):
+                st.json(message["details"])
+
+# Input
+if prompt := st.chat_input("Ex: What was the AOV during Summer 1997?"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    if not agent_workflow:
+        if model_option == "Google Gemini" and not gemini_key:
+            st.error("Please enter a Gemini API Key in the sidebar or check your Secrets configuration.")
+        else:
+            st.error("Agent failed to load. Check settings.")
+    else:
+        with st.chat_message("assistant"):
+            
+            status_container = st.status("🚀 **Agent Working...**", expanded=True)
+            
+            def stream_callback(msg):
+                status_container.write(msg)
+            
+            agent_instance.status_callback = stream_callback
+            
+            try:
+                initial_state = {
+                    "question": prompt,
+                    "format_hint": "str",
+                    "retries": 0,
+                    "sql_error": None
+                }
+                
+                with dspy.context(lm=lm_instance):
+                    output = agent_workflow.invoke(initial_state)
+                
+                status_container.update(label="✅ **Analysis Complete!**", state="complete", expanded=False)
+                
+                final_ans = output.get("final_answer", "No answer.")
+                explanation = output.get("explanation", "")
+                
+                full_response = f"**Answer:** {final_ans}\n\n_{explanation}_"
+                st.markdown(full_response)
+                
+                details = {
+                    "sql": output.get("sql_query"),
+                    "citations": output.get("citations"),
+                    "sql_error": output.get("sql_error"),
+                    "classification": output.get("classification")
+                }
+                
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": full_response,
+                    "details": details
+                })
+                
+            except Exception as e:
+                status_container.update(label="❌ **Error**", state="error")
+                st.error(f"An error occurred: {str(e)}")
+            finally:
+                agent_instance.status_callback = None
 
 # ==========================================
 # MODE 2: BATCH EVALUATION
@@ -260,7 +300,6 @@ elif app_mode == "Batch Evaluation":
                             # Parse Final Answer (Handle types)
                             final_ans = output.get("final_answer")
                             
-                            # --- FIX: Check the correct variable 'final_ans' ---
                             if isinstance(final_ans, str) and item.get('format_hint') != 'str':
                                  try:
                                      # Clean up markdown code blocks if present
